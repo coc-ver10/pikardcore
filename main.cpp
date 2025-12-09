@@ -1354,7 +1354,14 @@ int main(void) {
                 first_time = false;
                 break;
               }
-            } else if (i == 1) {
+            }
+#if PCB_V2_LAYOUT == 1
+            // V2 layout: Knob 1 controls Function B, Knob 2 controls Function A
+            else if (i == 2) {
+#else
+            // V1 layout: Knob 1 controls Function A, Knob 2 controls Function B
+            else if (i == 1) {
+#endif
               ledarray_bar =
                   input_knob[i].Value() * 1000 / input_knob[i].ValueMax();
               ledarray_bar_debounce = 1;
@@ -1450,7 +1457,14 @@ int main(void) {
                 default:
                   break;
               }
-            } else if (i == 2) {
+            }
+#if PCB_V2_LAYOUT == 1
+            // V2 layout: Knob 1 controls Function B, Knob 2 controls Function A
+            else if (i == 1) {
+#else
+            // V1 layout: Knob 1 controls Function A, Knob 2 controls Function B
+            else if (i == 2) {
+#endif
               ledarray_bar =
                   input_knob[i].Value() * 1000 / input_knob[i].ValueMax();
               ledarray_bar_debounce = 2;
