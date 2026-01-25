@@ -32,16 +32,31 @@ quick: doth/easing.h doth/filter.h
 	echo "BUILD SUCCESS"
 
 changeto16:
+ifeq ($(shell uname),Darwin)
+	sed -i '' 's/(2 \* 1024 \* 1024)/(16 \* 1024 \* 1024)/g' CMakeLists.txt
+	sed -i '' 's/(4 \* 1024 \* 1024)/(16 \* 1024 \* 1024)/g' CMakeLists.txt
+else
 	sed -i 's/(2 \* 1024 \* 1024)/(16 \* 1024 \* 1024)/g' CMakeLists.txt
 	sed -i 's/(4 \* 1024 \* 1024)/(16 \* 1024 \* 1024)/g' CMakeLists.txt
+endif
 
 changeto2:
+ifeq ($(shell uname),Darwin)
+	sed -i '' 's/(16 \* 1024 \* 1024)/(2 \* 1024 \* 1024)/g' CMakeLists.txt
+	sed -i '' 's/(4 \* 1024 \* 1024)/(2 \* 1024 \* 1024)/g' CMakeLists.txt
+else
 	sed -i 's/(16 \* 1024 \* 1024)/(2 \* 1024 \* 1024)/g' CMakeLists.txt
 	sed -i 's/(4 \* 1024 \* 1024)/(2 \* 1024 \* 1024)/g' CMakeLists.txt
+endif
 
 changeto4:
+ifeq ($(shell uname),Darwin)
+	sed -i '' 's/(16 \* 1024 \* 1024)/(4 \* 1024 \* 1024)/g' CMakeLists.txt
+	sed -i '' 's/(2 \* 1024 \* 1024)/(4 \* 1024 \* 1024)/g' CMakeLists.txt
+else
 	sed -i 's/(16 \* 1024 \* 1024)/(4 \* 1024 \* 1024)/g' CMakeLists.txt
 	sed -i 's/(2 \* 1024 \* 1024)/(4 \* 1024 \* 1024)/g' CMakeLists.txt
+endif
 
 clean:
 	rm -rf build
