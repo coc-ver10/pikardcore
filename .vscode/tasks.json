@@ -1,0 +1,122 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Install Prerequisites",
+      "type": "shell",
+      "command": "make",
+      "args": ["prereqs"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "detail": "Install clang-format, cmake, gcc-arm-embedded, minicom, sox, Python packages"
+    },
+    {
+      "label": "Setup Pico SDK",
+      "type": "shell",
+      "command": "make",
+      "args": ["pico-sdk"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "detail": "Clone Raspberry Pi Pico SDK v2.1.1 and initialize submodules"
+    },
+    {
+      "label": "Build 16MB (31kHz)",
+      "type": "shell",
+      "command": "SAMPLE_RATE=31000 make build16",
+      "problemMatcher": ["$gcc"],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "detail": "Build for 16MB Pico at 31kHz (default)"
+    },
+    {
+      "label": "Build 16MB (22kHz)",
+      "type": "shell",
+      "command": "SAMPLE_RATE=22000 make build16",
+      "problemMatcher": ["$gcc"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "detail": "Build for 16MB Pico at 22kHz (more stable)"
+    },
+    {
+      "label": "Clean Build",
+      "type": "shell",
+      "command": "make",
+      "args": ["clean"],
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "detail": "Remove build/, generated headers, and converted audio"
+    },
+    {
+      "label": "Quick Build (current config)",
+      "type": "shell",
+      "command": "SAMPLE_RATE=31000 make quick",
+      "problemMatcher": ["$gcc"],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "detail": "Quick rebuild without changing flash size settings"
+    },
+    {
+      "label": "Open Debug Serial Monitor",
+      "type": "shell",
+      "command": "sudo minicom -b 115200 -o -D /dev/ttyACM0",
+      "problemMatcher": [],
+      "group": "none",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false
+      },
+      "detail": "Open minicom serial monitor (requires DEBUG flags enabled in main.cpp)"
+    },
+    {
+      "label": "Full Clean + Build 16MB",
+      "type": "shell",
+      "dependsOn": [
+        "Clean Build",
+        "Build 16MB (31kHz)"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": [],
+      "group": "build",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      },
+      "detail": "Clean and full rebuild for 16MB Pico"
+    },
+  ]
+}
