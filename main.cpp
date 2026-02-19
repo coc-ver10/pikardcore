@@ -9,7 +9,12 @@
 #include "hardware/clocks.h"
 #include "hardware/flash.h"  // flash memory
 #include "hardware/irq.h"    // interrupts
+#if I2S_AUDIO_ENABLED == 1
+#include "hardware/pio.h"    // PIO for I2S
+#include "pico/time.h"       // repeating_timer
+#else
 #include "hardware/pwm.h"    // pwm
+#endif
 #include "hardware/sync.h"   // wait for interrupt
 #include "pico/binary_info.h"
 #include "pico/stdlib.h"  // stdlib
@@ -32,16 +37,26 @@
 #include "doth/runningavg.h"
 #include "doth/sequencer.h"
 #include "doth/trigger_out.h"
+#if I2S_AUDIO_ENABLED == 1
+#include "doth/i2s_audio.h"
+#endif
 
 // constants
-#define CLOCK_RATE (SAMPLE_RATE * 8)  // clock rate in kHz
+#define SYSTEM_CLOCK_KHZ 125000  // 125 MHz (default RP2040 clock)
 #define NUM_BUTTONS 8
 #define NUM_KNOBS 3
 #define NUM_LEDS 8
 #define DISTORTION_MAX 30
 #define VOLUME_REDUCE_MAX 30
 #define HEAD_SHIFT 10  // crossfade time in samples (2^HEAD_SHIFT)
-#define AUDIO_PIN 20   // audio out
+#if I2S_AUDIO_ENABLED == 1
+// I2S Audio Output GPIOs (match hardware wiring)
+#define I2S_DATA_PIN 19   // DIN (data out)
+#define I2S_BCK_PIN 18    // BCK (bit clock)
+#define I2S_LCK_PIN 20    // LCK (word select / LRCLK)
+#else
+#define AUDIO_PIN 20      // PWM audio out
+#endif
 #ifdef PICO_DEFAULT_LED_PIN
 #define LED_PIN PICO_DEFAULT_LED_PIN
 #endif
@@ -89,6 +104,10 @@ Knob input_knob[NUM_KNOBS];
 LEDArray ledarray;
 
 TriggerOut output_trigger;
+
+#if I2S_AUDIO_ENABLED == 1
+I2SAudio i2s_audio;
+#endif
 
 // audio tracking
 uint8_t audio_now = 0;
@@ -241,7 +260,7 @@ void param_set_bpm(uint16_t bpm, uint16_t &bpm_set_, uint32_t &beat_thresh_,
   // beat_thresh_ = round(((SAMPLE_RATE * 960.0) << flag_half_time) /
   // bpm_fudge);
   beat_thresh_ = round(((SAMPLE_RATE * 960.0)) / bpm_fudge);
-  audio_clk_thresh = round(CLOCK_RATE * BPM_SAMPLED / 250.0 /
+  audio_clk_thresh = round(SYSTEM_CLOCK_KHZ * BPM_SAMPLED / 250.0 /
                            (SAMPLE_RATE / 1000.0) / bpm_fudge);
 #ifdef DEBUG_BPM
   printf("new bpm: %d\n", bpm_set_);
@@ -275,13 +294,77 @@ int randint(int min, int max) {
 }
 
 /*
- * PWM INTERRUPT LOGIC (main audio thread)
+ * AUDIO INTERRUPT LOGIC (main audio thread)
  */
-void pwm_interrupt_handler() {
+#if I2S_AUDIO_ENABLED == 1
+// Forward declaration
+void audio_interrupt_handler();
+
+// Timer callback for I2S audio
+bool audio_timer_callback(struct repeating_timer *t) {
+  audio_interrupt_handler();
+  return true;  // Keep repeating
+}
+
+#if I2S_TEST_SINE == 1
+// Sine wave test: Generate 440Hz sine wave
+// 440Hz at 31kHz sample rate = 70.45 samples per cycle
+// Use a simple sine table (16 samples)
+const uint8_t sine_table[16] = {
+  128, 177, 217, 242, 250, 242, 217, 177,
+  128,  79,  39,  14,   6,  14,  39,  79
+};
+static uint8_t sine_index = 0;
+static uint8_t sine_counter = 0;
+// 440Hz needs phase increment of 440/31000 * 16 = 0.227 table steps per sample
+// Simplified: advance 1 step every ~4.4 samples (16 steps * 31000 / 440 / 16 = 4.43)
+#endif
+
+void audio_interrupt_handler()
+#else
+void pwm_interrupt_handler()
+#endif
+{
+#if I2S_AUDIO_ENABLED == 0
   pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
+#endif
+
+#if I2S_TEST_SINE == 1
+  // Generate 440Hz sine wave test tone
+  // Advance through sine table at correct rate for 440Hz
+  // For 48kHz: 48000/440/16samples = 6.818, so advance every ~7 samples
+  sine_counter++;
+  if (sine_counter >= 7) {  // ~48000/336 = 142.8Hz per cycle, 16 steps = 142.8/16 ≈ ~449Hz
+    sine_counter = 0;
+    sine_index = (sine_index + 1) & 0x0F;  // Wrap at 16
+  }
+  
+  // Heartbeat LED: blink once per second to show interrupt is running
+  static uint32_t led_counter = 0;
+  led_counter++;
+  if (led_counter >= SAMPLE_RATE) {  // Once per second
+    gpio_put(LED_PIN, !gpio_get(LED_PIN));  // Toggle LED
+    led_counter = 0;
+  }
+  
+  uint8_t test_audio = sine_table[sine_index];
+  
+#if I2S_AUDIO_ENABLED == 1
+  if (i2s_audio.CanWrite()) {
+    i2s_audio.WriteSample(test_audio);
+  }
+#else
+  pwm_set_gpio_level(AUDIO_PIN, test_audio);
+#endif
+  return;  // Skip all normal audio processing
+#endif
 
   if ((!do_sync_play && is_syncing) || do_mute) {
+#if I2S_AUDIO_ENABLED == 1
+    i2s_audio.WriteSilence();
+#else
     pwm_set_gpio_level(AUDIO_PIN, 128);
+#endif
     return;
     // bool do_manual_hit = false;
     // if (do_mute) {
@@ -800,7 +883,13 @@ void pwm_interrupt_handler() {
     // </dither>
   }
 
+#if I2S_AUDIO_ENABLED == 1
+  if (i2s_audio.CanWrite()) {
+    i2s_audio.WriteSample(audio_now);
+  }
+#else
   pwm_set_gpio_level(AUDIO_PIN, audio_now);
+#endif
 }
 
 void print_buf(const uint8_t *buf, size_t len) {
@@ -972,16 +1061,48 @@ int main(void) {
   // sleep needed to make sure it can start on battery
   // not sure why
   sleep_ms(100);
+  
+  printf("\n\n=== Pikardcore I2S Firmware ===\n");
+  printf("Sample Rate: %d Hz\n", SAMPLE_RATE);
+  printf("System Clock: %d kHz (%d MHz)\n", SYSTEM_CLOCK_KHZ, SYSTEM_CLOCK_KHZ/1000);
 
   // initialize bpm
   param_set_bpm(BPM_SAMPLED, bpm_set, beat_thresh, audio_clk_thresh);
 
-  // initialize leds
+#if I2S_AUDIO_ENABLED == 0
+  // initialize leds (disabled when I2S uses GPIO 18-19)
   ledarray.Init();
+#endif
 
-  // initialize clocking and PWM interrupts
-  // overclock at a multiple of sampling rate
-  set_sys_clock_khz(CLOCK_RATE, true);
+  // Setup LED for heartbeat
+  gpio_init(LED_PIN);
+  gpio_set_dir(LED_PIN, GPIO_OUT);
+
+#if I2S_AUDIO_ENABLED == 1
+  // Initialize I2S audio output via PIO
+  // Use pio1 (pio0 is used by WS2812 if enabled)
+  // System clock is default 125 MHz - no need to change
+  i2s_audio.Init(SAMPLE_RATE, pio1, 0, I2S_DATA_PIN, I2S_BCK_PIN, I2S_LCK_PIN);
+  i2s_audio.Start();
+  
+  // Setup hardware timer for sample rate interrupt
+  // Using negative period for precise timing
+  int32_t timer_period_us = -(1000000 / SAMPLE_RATE);
+  struct repeating_timer audio_timer;
+  bool timer_ok = add_repeating_timer_us(
+      timer_period_us,
+      audio_timer_callback,
+      NULL,
+      &audio_timer
+  );
+  if (!timer_ok) {
+    printf("ERROR: Failed to setup audio timer\n");
+  } else {
+    printf("I2S Audio Timer: %d µs period (~%d Hz)\n", 
+           -timer_period_us, 1000000 / -timer_period_us);
+  }
+#else
+  // Initialize PWM audio output
   gpio_set_function(AUDIO_PIN, GPIO_FUNC_PWM);
   int audio_pin_slice = pwm_gpio_to_slice_num(AUDIO_PIN);
   pwm_clear_irq(audio_pin_slice);
@@ -1001,10 +1122,9 @@ int main(void) {
   pwm_config_set_wrap(&config, 250);
   pwm_init(audio_pin_slice, &config, true);
   pwm_set_gpio_level(AUDIO_PIN, 0);
+#endif
 
   // setup gpio pins
-  gpio_init(LED_PIN);
-  gpio_set_dir(LED_PIN, GPIO_OUT);
   gpio_init(CLOCK_PIN);
   gpio_set_dir(CLOCK_PIN, GPIO_IN);
   gpio_pull_down(CLOCK_PIN);

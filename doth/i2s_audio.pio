@@ -1,0 +1,78 @@
+; I2S Audio Output PIO Program
+; Uses SET pins for LCK and side-set for BCK (non-consecutive pin support)
+;
+; Pin assignments:
+;   OUT pin: GPIO 19 (DIN - serial data)
+;   SIDE-SET pin: GPIO 18 (BCK - bit clock)
+;   SET pin: GPIO 20 (LCK - word select)
+;
+; Timing per channel: 3 setup + 15×2 loop = 33 PIO cycles
+; Total per frame: 66 PIO cycles, 32 BCK rising edges
+; Clock divider = sys_clock / (66 × sample_rate)
+;
+; Data changes on BCK falling edge, DAC samples on BCK rising edge
+
+.program i2s_audio
+.side_set 1
+
+.wrap_target
+    ; Left channel (16 bits) - LCK low
+    set pins, 0         side 0       ; LCK=0, BCK=0
+    out pins, 1         side 0       ; Output MSB, BCK=0 (data setup)
+    set x, 14           side 1       ; BCK=1 (DAC samples MSB), x=14 for 15 more bits
+bitloop_left:
+    out pins, 1         side 0       ; Output next bit on BCK falling edge
+    jmp x-- bitloop_left side 1      ; BCK=1 (DAC samples bit)
+    
+    ; Right channel (16 bits) - LCK high
+    set pins, 1         side 0       ; LCK=1, BCK=0
+    out pins, 1         side 0       ; Output MSB, BCK=0 (data setup)
+    set x, 14           side 1       ; BCK=1 (DAC samples MSB), x=14
+bitloop_right:
+    out pins, 1         side 0       ; Output next bit on BCK falling edge
+    jmp x-- bitloop_right side 1     ; BCK=1 (DAC samples bit)
+.wrap
+
+
+% c-sdk {
+static inline void i2s_audio_program_init(PIO pio, uint sm, uint offset, 
+                                          uint data_pin, uint bck_pin, uint lck_pin,
+                                          uint32_t sample_rate, uint32_t system_clock_hz) {
+    // Configure the state machine
+    pio_sm_config c = i2s_audio_program_get_default_config(offset);
+    
+    // Configure OUT pin - routes to GPIO 19 (DIN - data out)
+    // 'out pins' instruction sends serial data here
+    pio_gpio_init(pio, data_pin);  // data_pin = GPIO 19
+    sm_config_set_out_pins(&c, data_pin, 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, true);
+    
+    // Configure SIDE-SET pin - routes to GPIO 18 (BCK - bit clock)
+    // 'side' parameter controls bit clock
+    pio_gpio_init(pio, bck_pin);  // bck_pin = GPIO 18
+    sm_config_set_sideset_pins(&c, bck_pin);
+    pio_sm_set_consecutive_pindirs(pio, sm, bck_pin, 1, true);
+    
+    // Configure SET pin - routes to GPIO 20 (LCK - word select)
+    // 'set pins' instruction controls left/right channel select
+    pio_gpio_init(pio, lck_pin);  // lck_pin = GPIO 20
+    sm_config_set_set_pins(&c, lck_pin, 1);
+    pio_sm_set_consecutive_pindirs(pio, sm, lck_pin, 1, true);
+    
+    // Configure clock divider
+    // 33 PIO cycles per channel × 2 channels = 66 PIO cycles per sample
+    // divider = sys_clock / (66 × sample_rate)
+    float div = (float)system_clock_hz / (66.0f * sample_rate);
+    sm_config_set_clkdiv(&c, div);
+    
+    // Configure autopull: pull when OSR is empty (32 bits)
+    sm_config_set_out_shift(&c, false, true, 32);  // shift left, autopull, 32 bits
+    
+    // Join TX FIFO (8 deep instead of 4)
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    
+    // Initialize and enable state machine
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}

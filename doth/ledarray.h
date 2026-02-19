@@ -1,4 +1,20 @@
 class LEDArray {
+#if I2S_AUDIO_ENABLED == 1
+  // LEDs disabled when I2S is active (GPIO 18-19 conflict)
+ public:
+  void Init() {}
+  bool Continue() { return false; }
+  void LedSet(uint8_t i, uint8_t v) {}
+  void LedUpdate(uint8_t i) {}
+  void Update() {}
+  void Clear() {}
+  void On(uint8_t j) {}
+  void Set(uint8_t i, uint16_t v) {}
+  void Add(uint8_t i, uint16_t v) {}
+  void SetBinary(uint8_t v) {}
+  void SetAll(uint16_t v) {}
+};
+#else
   LED led[8];
   uint8_t vals[8];
   uint16_t do_leds;
@@ -89,3 +105,4 @@ class LEDArray {
     }
   }
 };
+#endif

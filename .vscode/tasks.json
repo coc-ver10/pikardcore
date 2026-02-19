@@ -30,9 +30,9 @@
       "detail": "Clone Raspberry Pi Pico SDK v2.1.1 and initialize submodules"
     },
     {
-      "label": "Build 16MB (31kHz)",
+      "label": "Build 16MB (48kHz)",
       "type": "shell",
-      "command": "SAMPLE_RATE=31000 make build16",
+      "command": "SAMPLE_RATE=48000 make build16",
       "problemMatcher": ["$gcc"],
       "group": {
         "kind": "build",
@@ -44,7 +44,7 @@
         "showReuseMessage": false,
         "clear": true
       },
-      "detail": "Build for 16MB Pico at 31kHz (default)"
+      "detail": "Build for 16MB Pico at 48kHz (I2S compatible, default)"
     },
     {
       "label": "Build 16MB (22kHz)",
@@ -77,7 +77,7 @@
     {
       "label": "Quick Build (current config)",
       "type": "shell",
-      "command": "SAMPLE_RATE=31000 make quick",
+      "command": "SAMPLE_RATE=48000 make quick",
       "problemMatcher": ["$gcc"],
       "group": "build",
       "presentation": {

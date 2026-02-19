@@ -18,6 +18,9 @@ doth/easing.h:
 	cd doth && python3 generate_easing.py > easing.h
 	clang-format -i --style=google doth/easing.h
 
+# Default sample rate if not specified (48 kHz for I2S DAC compatibility)
+SAMPLE_RATE ?= 48000
+
 doth/filter.h:
 	cd doth && python3 biquad.py $(SAMPLE_RATE) > filter.h
 	clang-format -i --style=google doth/filter.h
