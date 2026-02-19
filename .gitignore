@@ -34,3 +34,12 @@ pico-sdk/
 
 # macOS
 .DS_Store
+
+# Build directories and files
+build/
+doth/filter.h
+doth/easings.png
+doth/easing.h
+doth/audio2h.h
+audio2h/converted/
+audio2h/files.json
