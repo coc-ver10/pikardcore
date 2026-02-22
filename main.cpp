@@ -385,14 +385,6 @@ void pwm_interrupt_handler()
   pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
 #endif
 
-  // Debug: Verify audio interrupt handler is being called
-  static uint32_t handler_counter = 0;
-  if (++handler_counter >= SAMPLE_RATE) {
-    handler_counter = 0;
-    printf("[Handler] Called %d times, do_mute=%d, is_syncing=%d, do_sync_play=%d\n", 
-           SAMPLE_RATE, do_mute, is_syncing, do_sync_play);
-  }
-
 #if I2S_TEST_SINE == 1
   // Generate 440Hz sine wave using phase accumulator
   // sine_phase is 8.8 fixed-point, upper 8 bits index into 256-entry table
@@ -479,18 +471,6 @@ void pwm_interrupt_handler()
     select_beat++;
     if (select_beat >= sample_beats) {
       select_beat = 0;  // Wrap around
-    }
-    
-    // DIAGNOSTIC: Toggle onboard LED on every beat detection
-    // If beat detection works, LED should blink at ~165 BPM (~5.5 Hz for eighth notes)
-    static bool beat_diag_led = false;
-    beat_diag_led = !beat_diag_led;
-    gpio_put(LED_PIN, beat_diag_led);
-    
-    // Debug: Print every 4 beats to monitor cycling
-    if (beat_num_total % 4 == 0) {
-      printf("[BEAT %lu] select_beat=%d/%d (mod 8 = %d)\n", 
-             beat_num_total, select_beat, sample_beats, select_beat % 8);
     }
     
     output_trigger.Trigger();
@@ -1233,13 +1213,6 @@ int main(void) {
   printf("  sample: %d, sample_beats: %d, sample_len: %lu\n", sample, sample_beats, sample_len);
   printf("  SAMPLES_PER_BEAT: %d\n", SAMPLES_PER_BEAT);
   printf("  phase_sample[0]: %lu, phase_sample[1]: %lu\n", phase_sample[0], phase_sample[1]);
-  
-  // DIAGNOSTIC: Verify beat_thresh is correct
-  // Expected: ~8727 samples for 165 BPM at 48kHz
-  // Fast blinks (5x100ms) = beat_thresh OK (< 20000)
-  // Slow blinks (5x500ms) = beat_thresh WRONG (>= 20000)
-  printf("  DIAGNOSTIC: beat_thresh=%lu (%s)\n", 
-         beat_thresh, beat_thresh < 20000 ? "OK" : "TOO HIGH!");
   printf("======================\n");
 
   // Initialize LEDs
@@ -1280,24 +1253,6 @@ int main(void) {
     sleep_ms(200);
   }
   printf("LED test complete\n");
-  
-  // DIAGNOSTIC: Clear visual indication of beat_thresh
-  // After 3 blinks: 1 sec pause, then:
-  // - LED SOLID ON for 2 sec = beat_thresh OK (< 20000)
-  // - LED STAYS OFF for 2 sec = beat_thresh WRONG 
-  sleep_ms(1000);  // Clear pause
-  if (beat_thresh < 20000) {
-    // SOLID ON = beat_thresh is correct (~8727)
-    gpio_put(LED_PIN, 1);
-    sleep_ms(2000);
-    gpio_put(LED_PIN, 0);
-    printf("DIAGNOSTIC: beat_thresh=%lu OK\n", beat_thresh);
-  } else {
-    // STAYS OFF = beat_thresh is WRONG
-    gpio_put(LED_PIN, 0);
-    sleep_ms(2000);
-    printf("DIAGNOSTIC: beat_thresh=%lu WRONG!\n", beat_thresh);
-  }
 
 #if I2S_AUDIO_ENABLED == 1
   // Initialize I2S audio output via PIO
