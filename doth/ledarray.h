@@ -1,6 +1,14 @@
+// Include shift register headers only when needed
+#if defined(SHIFT_REGISTER_ENABLED) && SHIFT_REGISTER_ENABLED == 1
+#include "shift_register.h"
+#include "led_mapper.h"
+#endif
+
 class LEDArray {
 #if I2S_AUDIO_ENABLED == 1
-  // LEDs disabled when I2S is active (GPIO 18-19 conflict)
+  // ========================================================================
+  // PATH 1: LEDs disabled when I2S is active (GPIO 18-19 conflict)
+  // ========================================================================
  public:
   void Init() {}
   bool Continue() { return false; }
@@ -14,7 +22,153 @@ class LEDArray {
   void SetBinary(uint8_t v) {}
   void SetAll(uint16_t v) {}
 };
+
+#elif defined(SHIFT_REGISTER_ENABLED) && SHIFT_REGISTER_ENABLED == 1
+  // ========================================================================
+  // PATH 2: NEW - Shift Register Implementation (16 LEDs - two cascaded registers)
+  // ========================================================================
+  ShiftRegister shift_reg;
+  uint8_t vals[16];      // Brightness values 0-255 for 16 LEDs
+  uint8_t dim_i;         // PWM counter for software dimming
+  uint16_t do_leds;      // Update counter
+
+ public:
+  void Init() {
+    shift_reg.Init(SR_SER_PIN, SR_SRCLK_PIN, SR_RCLK_PIN);
+    for (uint8_t i = 0; i < 16; i++) {
+      vals[i] = 0;
+    }
+    dim_i = 0;
+    do_leds = 0;
+  }
+
+  bool Continue() {
+    do_leds++;
+    if (do_leds % 1000 == 0) {
+      return true;
+    }
+    return false;
+  }
+
+  void LedSet(uint8_t i, uint8_t v) {
+    if (i < 16) {
+      uint8_t bit = LEDMapper::LogicalToBit(i);
+      shift_reg.SetBit(bit, v > 0);
+    }
+  }
+
+  void LedUpdate(uint8_t i) {
+    // Software PWM: called frequently for individual LED
+    if (i < 16) {
+      uint8_t bit = LEDMapper::LogicalToBit(i);
+      shift_reg.SetBit(bit, dim_i < vals[i]);
+    }
+  }
+
+  void Update() {
+    dim_i++;
+    // Apply software PWM to all LEDs
+    for (uint8_t i = 0; i < 16; i++) {
+      uint8_t bit = LEDMapper::LogicalToBit(i);
+      shift_reg.SetBit(bit, dim_i < vals[i]);
+    }
+    // Single hardware update for all LEDs
+    shift_reg.Update();
+  }
+
+  void Clear() {
+    for (uint8_t i = 0; i < 16; i++) {
+      vals[i] = 0;
+    }
+  }
+
+  void On(uint8_t j) {
+    if (j < 16) {
+      for (uint8_t i = 0; i < 16; i++) {
+        vals[i] = (i == j) ? 255 : 0;
+      }
+    }
+  }
+
+  // sets between 0 and 1000
+  void Set(uint8_t i, uint16_t v) {
+    if (i < 16) {
+      v = v * 255 / 1000;
+      if (v != vals[i]) {
+        vals[i] = v;
+      }
+    }
+  }
+
+  // sets between 0 and 1000
+  void Add(uint8_t i, uint16_t v) {
+    if (i < 16) {
+      v = v * 255 / 1000;
+      if (vals[i] + v > 255) {
+        vals[i] = 255;
+      } else {
+        vals[i] += v;
+      }
+    }
+  }
+
+  void SetBinary(uint8_t v) {
+    uint8_t j = 0;
+    for (uint8_t i = 128; i > 0; i = i / 2) {
+      if (j < 8) {  // Only first 8 LEDs for binary display
+        vals[j] = (v & i) ? 255 : 0;
+      }
+      j++;
+    }
+  }
+
+  // SetAll sets between 0 and 1000
+  void SetAll(uint16_t v) {
+    v = v * 4080 / 1000;  // 16 LEDs: 0-4080 (255*16)
+    for (uint8_t i = 0; i < 16; i++) {
+      if (v > 255) {
+        vals[i] = 255;
+        v -= 255;
+      } else if (v > 0) {
+        vals[i] = v;
+        v = 0;
+      } else {
+        vals[i] = 0;
+      }
+    }
+  }
+
+  // === NEW METHODS FOR ADDITIONAL LEDs (8-15) ===
+  
+  // Set Y/parameter LEDs (0-3 corresponds to Y1-Y4)
+  void SetYLED(uint8_t y_index, uint16_t brightness) {
+    if (y_index < 4) {
+      Set(LED_Y1 + y_index, brightness);
+    }
+  }
+
+  // Set control LEDs with simple on/off
+  void SetPlayStop(bool on) {
+    Set(LED_PLAY_STOP, on ? 1000 : 0);
+  }
+
+  void SetSeqRec(bool on) {
+    Set(LED_SEQ_REC, on ? 1000 : 0);
+  }
+
+  void SetSeqErase(bool on) {
+    Set(LED_SEQ_ERASE, on ? 1000 : 0);
+  }
+
+  void SetSeqOnOff(bool on) {
+    Set(LED_SEQ_ON_OFF, on ? 1000 : 0);
+  }
+};
+
 #else
+  // ========================================================================
+  // PATH 3: ORIGINAL - Direct GPIO Implementation (8 LEDs)
+  // ========================================================================
   LED led[8];
   uint8_t vals[8];
   uint16_t do_leds;
@@ -50,7 +204,7 @@ class LEDArray {
   }
 
   void Clear() {
-    for (uint8_t i = 0; i < 8; i++) {
+    for (uint8_t i = 0; i < 16; i++) {
       vals[i] = 0;
     }
   }
@@ -105,4 +259,4 @@ class LEDArray {
     }
   }
 };
-#endif
+#endif  // I2S_AUDIO_ENABLED / SHIFT_REGISTER_ENABLED

@@ -22,6 +22,12 @@
 #include "bsp/board.h"
 #include "tusb.h"
 
+// LED Configuration - MUST BE DEFINED BEFORE INCLUDES
+// Set to 1 to enable shift register LEDs (16 LEDs), 0 for legacy GPIO LEDs (8 LEDs)
+#ifndef SHIFT_REGISTER_ENABLED
+#define SHIFT_REGISTER_ENABLED 1  // Default: ENABLED for hardware testing
+#endif
+
 // pikocore files
 #include "doth/audio2h.h"
 #include "doth/button.h"
@@ -41,11 +47,22 @@
 #include "doth/i2s_audio.h"
 #endif
 
+
 // constants
 #define SYSTEM_CLOCK_KHZ 125000  // 125 MHz (default RP2040 clock)
 #define NUM_BUTTONS 8
 #define NUM_KNOBS 3
-#define NUM_LEDS 8
+
+#if SHIFT_REGISTER_ENABLED == 1
+#define NUM_LEDS 16  // Two cascaded shift registers: 16 LEDs
+// Shift register GPIO pins (from target_architecture.md)
+#define SR_SER_PIN    22   // Serial data input
+#define SR_SRCLK_PIN  27   // Shift register clock
+#define SR_RCLK_PIN   28   // Storage register clock (latch)
+#else
+#define NUM_LEDS 8   // Legacy GPIO mode: 8 LEDs
+#endif
+
 #define DISTORTION_MAX 30
 #define VOLUME_REDUCE_MAX 30
 #define HEAD_SHIFT 10  // crossfade time in samples (2^HEAD_SHIFT)
@@ -60,8 +77,12 @@
 #ifdef PICO_DEFAULT_LED_PIN
 #define LED_PIN PICO_DEFAULT_LED_PIN
 #endif
-#define CLOCK_PIN 22  // clock in pin
-#define TRIGO_PIN 21  // trigger out pin
+// GPIO pins - updated for target_architecture.md
+#define CLOCK_IN_PIN 2   // clock in pin (was 22, now updated)
+#define RESET_IN_PIN 3   // reset in pin 
+#define CLOCK_OUT_PIN 4  // clock out pin
+#define RESET_OUT_PIN 5  // reset out pin
+#define TRIGO_PIN 21     // trigger out pin (legacy, may conflict with keyboard mux)
 #define MAIN_LOOP_HZ 4
 #define MAIN_LOOP_DELAY 50
 
@@ -307,17 +328,30 @@ bool audio_timer_callback(struct repeating_timer *t) {
 }
 
 #if I2S_TEST_SINE == 1
-// Sine wave test: Generate 440Hz sine wave
-// 440Hz at 31kHz sample rate = 70.45 samples per cycle
-// Use a simple sine table (16 samples)
-const uint8_t sine_table[16] = {
-  128, 177, 217, 242, 250, 242, 217, 177,
-  128,  79,  39,  14,   6,  14,  39,  79
+// Sine wave test: Generate 440Hz sine wave using full 256-entry table
+// This gives smooth output with 256 amplitude levels
+const uint8_t sine_table[256] = {
+  128,131,134,137,140,143,146,149,152,155,158,162,165,167,170,173,
+  176,179,182,185,188,190,193,196,198,201,203,206,208,211,213,215,
+  218,220,222,224,226,228,230,232,234,235,237,238,240,241,243,244,
+  245,246,248,249,249,250,251,252,252,253,253,253,254,254,254,254,
+  254,254,254,253,253,253,252,252,251,250,249,249,248,246,245,244,
+  243,241,240,238,237,235,234,232,230,228,226,224,222,220,218,215,
+  213,211,208,206,203,201,198,196,193,190,188,185,182,179,176,173,
+  170,167,165,162,158,155,152,149,146,143,140,137,134,131,128,125,
+  122,119,116,113,110,107,104,101, 98, 94, 91, 89, 86, 83, 80, 77,
+   74, 71, 68, 66, 63, 60, 58, 55, 53, 50, 48, 45, 43, 41, 38, 36,
+   34, 32, 30, 28, 26, 24, 22, 21, 19, 18, 16, 15, 13, 12, 11, 10,
+    8,  7,  7,  6,  5,  4,  4,  3,  3,  3,  2,  2,  2,  2,  2,  2,
+    2,  3,  3,  3,  4,  4,  5,  6,  7,  7,  8, 10, 11, 12, 13, 15,
+   16, 18, 19, 21, 22, 24, 26, 28, 30, 32, 34, 36, 38, 41, 43, 45,
+   48, 50, 53, 55, 58, 60, 63, 66, 68, 71, 74, 77, 80, 83, 86, 89,
+   91, 94, 98,101,104,107,110,113,116,119,122,125
 };
-static uint8_t sine_index = 0;
-static uint8_t sine_counter = 0;
-// 440Hz needs phase increment of 440/31000 * 16 = 0.227 table steps per sample
-// Simplified: advance 1 step every ~4.4 samples (16 steps * 31000 / 440 / 16 = 4.43)
+// Phase accumulator for precise 440Hz generation at 48kHz
+// 440/48000 * 256 = 2.3467 (fixed-point: 2.3467 * 256 = 600.7 ≈ 601)
+static uint16_t sine_phase = 0;
+#define SINE_PHASE_INC 601  // 440Hz at 48kHz with 256-entry table (8.8 fixed-point)
 #endif
 
 void audio_interrupt_handler()
@@ -330,14 +364,10 @@ void pwm_interrupt_handler()
 #endif
 
 #if I2S_TEST_SINE == 1
-  // Generate 440Hz sine wave test tone
-  // Advance through sine table at correct rate for 440Hz
-  // For 48kHz: 48000/440/16samples = 6.818, so advance every ~7 samples
-  sine_counter++;
-  if (sine_counter >= 7) {  // ~48000/336 = 142.8Hz per cycle, 16 steps = 142.8/16 ≈ ~449Hz
-    sine_counter = 0;
-    sine_index = (sine_index + 1) & 0x0F;  // Wrap at 16
-  }
+  // Generate 440Hz sine wave using phase accumulator
+  // sine_phase is 8.8 fixed-point, upper 8 bits index into 256-entry table
+  sine_phase += SINE_PHASE_INC;
+  uint8_t table_index = (sine_phase >> 8) & 0xFF;
   
   // Heartbeat LED: blink once per second to show interrupt is running
   static uint32_t led_counter = 0;
@@ -347,7 +377,7 @@ void pwm_interrupt_handler()
     led_counter = 0;
   }
   
-  uint8_t test_audio = sine_table[sine_index];
+  uint8_t test_audio = sine_table[table_index];
   
 #if I2S_AUDIO_ENABLED == 1
   if (i2s_audio.CanWrite()) {
@@ -1056,6 +1086,7 @@ void midi_timing() {
 #endif
 
 int main(void) {
+  
   stdio_init_all();
 
   // sleep needed to make sure it can start on battery
@@ -1069,9 +1100,16 @@ int main(void) {
   // initialize bpm
   param_set_bpm(BPM_SAMPLED, bpm_set, beat_thresh, audio_clk_thresh);
 
-#if I2S_AUDIO_ENABLED == 0
-  // initialize leds (disabled when I2S uses GPIO 18-19)
+  // Initialize LEDs
+#if SHIFT_REGISTER_ENABLED == 1
+  // Shift register LEDs (GPIO 22, 27, 28) - 16 LEDs via two cascaded 74HC595s
   ledarray.Init();
+#elif I2S_AUDIO_ENABLED == 0
+  // Legacy GPIO LEDs (GPIO 12-19) - disabled when I2S uses GPIO 18-19
+  ledarray.Init();
+#else
+  // LEDs disabled (I2S enabled and no shift register)
+  printf("LEDs disabled: I2S audio uses conflicting GPIO pins\n");
 #endif
 
   // Setup LED for heartbeat
@@ -1125,9 +1163,9 @@ int main(void) {
 #endif
 
   // setup gpio pins
-  gpio_init(CLOCK_PIN);
-  gpio_set_dir(CLOCK_PIN, GPIO_IN);
-  gpio_pull_down(CLOCK_PIN);
+  gpio_init(CLOCK_IN_PIN);
+  gpio_set_dir(CLOCK_IN_PIN, GPIO_IN);
+  gpio_pull_down(CLOCK_IN_PIN);
   gpio_init(23);
   gpio_pull_up(23);
   gpio_set_dir(23, GPIO_OUT);
@@ -1202,7 +1240,7 @@ int main(void) {
 
   // initialize one wire midi
   onewiremidi =
-      Onewiremidi_new(pio1, 0, CLOCK_PIN, midi_note_on, midi_note_off,
+      Onewiremidi_new(pio1, 0, CLOCK_IN_PIN, midi_note_on, midi_note_off,
                       midi_start, midi_continue, midi_stop, midi_timing);
 #endif
 
@@ -1696,7 +1734,7 @@ int main(void) {
 
 #if MIDI_IN_ENABLED == 0
     // trigger in
-    uint8_t clock_pin = 1 - gpio_get(CLOCK_PIN);
+    uint8_t clock_pin = 1 - gpio_get(CLOCK_IN_PIN);
     // code to verify polarity -KEEP
     // if (clock_pin == 1 && clock_pin_last == 0) {
     //   printf("[%d] on\n", clock_sync_ms);
