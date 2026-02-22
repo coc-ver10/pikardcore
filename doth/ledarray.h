@@ -5,25 +5,7 @@
 #endif
 
 class LEDArray {
-#if I2S_AUDIO_ENABLED == 1
-  // ========================================================================
-  // PATH 1: LEDs disabled when I2S is active (GPIO 18-19 conflict)
-  // ========================================================================
- public:
-  void Init() {}
-  bool Continue() { return false; }
-  void LedSet(uint8_t i, uint8_t v) {}
-  void LedUpdate(uint8_t i) {}
-  void Update() {}
-  void Clear() {}
-  void On(uint8_t j) {}
-  void Set(uint8_t i, uint16_t v) {}
-  void Add(uint8_t i, uint16_t v) {}
-  void SetBinary(uint8_t v) {}
-  void SetAll(uint16_t v) {}
-};
-
-#elif defined(SHIFT_REGISTER_ENABLED) && SHIFT_REGISTER_ENABLED == 1
+#if defined(SHIFT_REGISTER_ENABLED) && SHIFT_REGISTER_ENABLED == 1
   // ========================================================================
   // PATH 2: NEW - Shift Register Implementation (16 LEDs - two cascaded registers)
   // ========================================================================
@@ -67,6 +49,15 @@ class LEDArray {
 
   void Update() {
     dim_i++;
+    
+    // Debug: Print state periodically
+    static uint32_t debug_counter = 0;
+    if (++debug_counter >= 20000) {  // Every 20000 calls (~1 second at 20kHz)
+      debug_counter = 0;
+      printf("[LED Update] dim_i=%d, vals[0]=%d, vals[1]=%d, vals[7]=%d\n", 
+             dim_i, vals[0], vals[1], vals[7]);
+    }
+    
     // Apply software PWM to all LEDs
     for (uint8_t i = 0; i < 16; i++) {
       uint8_t bit = LEDMapper::LogicalToBit(i);
@@ -138,6 +129,17 @@ class LEDArray {
     }
   }
 
+  // === DIAGNOSTIC METHOD ===
+  // Direct hardware control bypassing PWM for testing
+  void DirectTest(uint8_t led_index) {
+    shift_reg.Clear();
+    if (led_index < 8) {
+      uint8_t bit = LEDMapper::LogicalToBit(led_index);
+      shift_reg.SetBit(bit, true);
+    }
+    shift_reg.Update();
+  }
+  
   // === NEW METHODS FOR ADDITIONAL LEDs (8-15) ===
   
   // Set Y/parameter LEDs (0-3 corresponds to Y1-Y4)
@@ -163,6 +165,25 @@ class LEDArray {
   void SetSeqOnOff(bool on) {
     Set(LED_SEQ_ON_OFF, on ? 1000 : 0);
   }
+};
+
+#elif I2S_AUDIO_ENABLED == 1
+  // ========================================================================
+  // PATH 2: LEDs disabled when I2S is active without shift registers
+  // (GPIO 18-19 would conflict with legacy GPIO LEDs)
+  // ========================================================================
+ public:
+  void Init() {}
+  bool Continue() { return false; }
+  void LedSet(uint8_t i, uint8_t v) {}
+  void LedUpdate(uint8_t i) {}
+  void Update() {}
+  void Clear() {}
+  void On(uint8_t j) {}
+  void Set(uint8_t i, uint16_t v) {}
+  void Add(uint8_t i, uint16_t v) {}
+  void SetBinary(uint8_t v) {}
+  void SetAll(uint16_t v) {}
 };
 
 #else

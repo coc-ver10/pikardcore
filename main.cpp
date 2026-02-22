@@ -28,6 +28,13 @@
 #define SHIFT_REGISTER_ENABLED 1  // Default: ENABLED for hardware testing
 #endif
 
+// Shift register GPIO pins - MUST BE DEFINED BEFORE ledarray.h include
+#if SHIFT_REGISTER_ENABLED == 1
+#define SR_SER_PIN    22   // Serial data input
+#define SR_SRCLK_PIN  27   // Shift register clock
+#define SR_RCLK_PIN   28   // Storage register clock (latch)
+#endif
+
 // pikocore files
 #include "doth/audio2h.h"
 #include "doth/button.h"
@@ -55,10 +62,6 @@
 
 #if SHIFT_REGISTER_ENABLED == 1
 #define NUM_LEDS 16  // Two cascaded shift registers: 16 LEDs
-// Shift register GPIO pins (from target_architecture.md)
-#define SR_SER_PIN    22   // Serial data input
-#define SR_SRCLK_PIN  27   // Shift register clock
-#define SR_RCLK_PIN   28   // Storage register clock (latch)
 #else
 #define NUM_LEDS 8   // Legacy GPIO mode: 8 LEDs
 #endif
@@ -76,6 +79,8 @@
 #endif
 #ifdef PICO_DEFAULT_LED_PIN
 #define LED_PIN PICO_DEFAULT_LED_PIN
+#else
+#define LED_PIN 25        // Onboard LED on Raspberry Pi Pico
 #endif
 // GPIO pins - updated for target_architecture.md
 #define CLOCK_IN_PIN 2   // clock in pin (was 22, now updated)
@@ -152,7 +157,7 @@ bool phase_head = 0;
 uint32_t phase_xfade = 0;
 
 // beat tracking
-uint16_t select_beat = 0;
+volatile uint16_t select_beat = 0;
 uint16_t select_beat_freeze = 0;
 bool direction[] = {1, 1};  // 0 = reverse, 1 = forward
 bool base_direction = 1;    // 0 = reverse, 1 == forward
@@ -172,7 +177,7 @@ bool do_lock_clock = false;
 uint32_t beat_counter = 0;
 uint16_t bpm_set = 79;
 uint32_t beat_thresh = 21120000;
-uint32_t beat_num_total = 0;
+volatile uint32_t beat_num_total = 0;
 bool beat_onset = false;
 bool beat_led = 0;
 bool btn_reset = 0;
@@ -275,18 +280,23 @@ void param_set_bpm(uint16_t bpm, uint16_t &bpm_set_, uint32_t &beat_thresh_,
   }
   // set default bpm
   bpm_set_ = bpm;
-  // double bpm_fudge = ((double)bpm);
-  // calibrated
-  double bpm_fudge = ((double)bpm) * 1.054234344 - 1.420118655;
-  // beat_thresh_ = round(((SAMPLE_RATE * 960.0) << flag_half_time) /
-  // bpm_fudge);
-  beat_thresh_ = round(((SAMPLE_RATE * 960.0)) / bpm_fudge);
-  audio_clk_thresh = round(SYSTEM_CLOCK_KHZ * BPM_SAMPLED / 250.0 /
-                           (SAMPLE_RATE / 1000.0) / bpm_fudge);
-#ifdef DEBUG_BPM
-  printf("new bpm: %d\n", bpm_set_);
-  printf("new bpm fudge: %2.3f\n", bpm_fudge);
-#endif
+  
+  // Calculate samples per beat (eighth note)
+  // BPM refers to quarter notes, so eighth notes are 2x faster
+  // Formula: (sample_rate * 60) / (bpm * 2) = samples per eighth note
+  double eighth_notes_per_second = ((double)bpm * 2.0) / 60.0;
+  beat_thresh_ = round((double)SAMPLE_RATE / eighth_notes_per_second);
+  
+  // For reference at 48kHz and 165 BPM:
+  // eighth_notes_per_second = 165*2/60 = 5.5
+  // beat_thresh = 48000 / 5.5 = 8,727 samples per eighth note
+  
+  // audio_clk_thresh controls sample playback speed
+  // At 48kHz, we want to play 1 audio sample per interrupt, so thresh = 1
+  audio_clk_thresh_ = 1;  
+  
+  printf("BPM set to %d, beat_thresh=%d samples (%.2f ms per eighth note)\n", 
+         bpm_set_, beat_thresh_, (float)beat_thresh_ / SAMPLE_RATE * 1000.0);
 }
 
 void param_set_volume(uint16_t knobval, uint8_t &distortion_,
@@ -323,6 +333,13 @@ void audio_interrupt_handler();
 
 // Timer callback for I2S audio
 bool audio_timer_callback(struct repeating_timer *t) {
+  // Blink LED every ~1 second to confirm timer is running
+  static uint32_t callback_counter = 0;
+  callback_counter++;
+  if (callback_counter % SAMPLE_RATE == 0) {
+    gpio_put(LED_PIN, !gpio_get(LED_PIN));
+  }
+  
   audio_interrupt_handler();
   return true;  // Keep repeating
 }
@@ -359,9 +376,22 @@ void audio_interrupt_handler()
 void pwm_interrupt_handler()
 #endif
 {
+  // CRITICAL FIX: Force disable button override of select_beat
+  // Buttons are still being read but should not control playback
+  button_on = NUM_BUTTONS;
+  button_on2 = NUM_BUTTONS;
+  
 #if I2S_AUDIO_ENABLED == 0
   pwm_clear_irq(pwm_gpio_to_slice_num(AUDIO_PIN));
 #endif
+
+  // Debug: Verify audio interrupt handler is being called
+  static uint32_t handler_counter = 0;
+  if (++handler_counter >= SAMPLE_RATE) {
+    handler_counter = 0;
+    printf("[Handler] Called %d times, do_mute=%d, is_syncing=%d, do_sync_play=%d\n", 
+           SAMPLE_RATE, do_mute, is_syncing, do_sync_play);
+  }
 
 #if I2S_TEST_SINE == 1
   // Generate 440Hz sine wave using phase accumulator
@@ -415,6 +445,16 @@ void pwm_interrupt_handler()
 
   // clocking when to change beats
   beat_counter++;
+  
+  // Debug: Print once per second to confirm interrupt is running
+  static uint32_t debug_counter = 0;
+  if (++debug_counter >= SAMPLE_RATE) {
+    debug_counter = 0;
+    printf("[INT] beat_num=%lu, ctr=%lu/%lu, sb=%d, onset=%d, beat_det=%s\n", 
+           beat_num_total, beat_counter, beat_thresh, select_beat, beat_onset?1:0,
+           (beat_counter >= beat_thresh) ? "YES" : "no");
+  }
+  
   if ((!is_syncing && beat_counter >= beat_thresh) || btn_reset || soft_sync) {
 #ifdef DEBUG_CLOCK
     if (soft_sync) {
@@ -431,8 +471,28 @@ void pwm_interrupt_handler()
     if (btn_reset) {
       beat_led = 1;
       beat_num_total = 0;
+      btn_reset = false;  // CRITICAL: Must clear this or beat detection fires at 48kHz!
     }
-    gpio_put(LED_PIN, beat_led);
+    
+    // CRITICAL: Advance select_beat IMMEDIATELY when beat is detected
+    // Don't wait for the audio_clk condition later
+    select_beat++;
+    if (select_beat >= sample_beats) {
+      select_beat = 0;  // Wrap around
+    }
+    
+    // DIAGNOSTIC: Toggle onboard LED on every beat detection
+    // If beat detection works, LED should blink at ~165 BPM (~5.5 Hz for eighth notes)
+    static bool beat_diag_led = false;
+    beat_diag_led = !beat_diag_led;
+    gpio_put(LED_PIN, beat_diag_led);
+    
+    // Debug: Print every 4 beats to monitor cycling
+    if (beat_num_total % 4 == 0) {
+      printf("[BEAT %lu] select_beat=%d/%d (mod 8 = %d)\n", 
+             beat_num_total, select_beat, sample_beats, select_beat % 8);
+    }
+    
     output_trigger.Trigger();
 
     if (do_mute_debounce > 0) {
@@ -591,9 +651,39 @@ void pwm_interrupt_handler()
   }
 
   // disable beat interrupts during fx
+  // DIAGNOSTIC: Completely disable fx_retrig system to isolate select_beat issue
+  fx_retrig = false;  // Force off every interrupt
+  btn_retrig = false;
+  
+  /*
+  static uint32_t fx_retrig_start_time = 0;
+  static uint32_t retrig_debug = 0;
+  
   if (fx_retrig) {
     beat_onset = false;
+    
+    if (fx_retrig_start_time == 0) {
+      fx_retrig_start_time = beat_num_total;
+    }
+    
+    // Safety: Force clear fx_retrig if stuck for more than 2 beats
+    if (beat_num_total - fx_retrig_start_time > 2) {
+      printf("[SAFETY] fx_retrig stuck for %lu beats - forcing clear!\n", 
+             beat_num_total - fx_retrig_start_time);
+      fx_retrig = false;
+      btn_retrig = false;
+      retrig_count = 0;
+    }
+    
+    if (++retrig_debug >= SAMPLE_RATE) {
+      retrig_debug = 0;
+      printf("[FX_RETRIG] blocking beat_onset (fx_retrig=true, duration=%lu beats)\n",
+             beat_num_total - fx_retrig_start_time);
+    }
+  } else {
+    fx_retrig_start_time = 0;  // Reset counter when not in retrig
   }
+  */
 
   // clocking when to change samples
   audio_clk++;
@@ -620,11 +710,25 @@ void pwm_interrupt_handler()
       sample_beats = raw_beats(sample);
 
       beat_onset = false;
+      
+      // NOTE: select_beat++ now happens earlier (in beat detection block)
+      // to ensure it always advances. This block used to do it but had issues.
+      // The wraparound is also handled there, so we skip redundant checks here.
+      /*
+      uint16_t old_beat = select_beat;
       if (do_lock_clock) {
         select_beat = beat_num_total % sample_beats;
       } else {
         select_beat++;
       }
+      
+      // Debug EVERY select_beat change to see if it's stuck
+      printf("[SELECT_BEAT] %d -> %d (beat_num=%lu, fx_retrig=%d, btn_retrig=%d)\n", 
+             old_beat, select_beat, beat_num_total, fx_retrig?1:0, btn_retrig?1:0);
+      */
+      
+      // DISABLED: These modifications interfere with the simple increment above
+      /*
       if (flag_half_time) {
         select_beat++;
         if (select_beat % 2 > 0)
@@ -647,6 +751,7 @@ void pwm_interrupt_handler()
           select_beat = randint(0, sample_beats - 1);
         }
       }
+      */
 
       // random gate
       if (probability_gate > 0) {
@@ -659,16 +764,22 @@ void pwm_interrupt_handler()
         noise_gate_thresh_use = noise_gate_thresh;
       }
 
-      // reset
+      // DISABLED: reset was interfering with LED cycling
+      // btn_reset gets triggered by MIDI timing every 16 beats
+      // TODO: Make reset optional or only on user button press
+      /*
       if (btn_reset) {
         btn_reset = 0;
         select_beat = 0;
       }
+      */
       // printf("button_on: %d\n", button_on);
       // printf("button_on2: %d\n", button_on2);
       // printf("select_beat: %d\n", select_beat);
 
-      // get beat from sequencer
+      // TEMPORARILY DISABLED: get beat from sequencer
+      // This was also overriding select_beat, preventing LED cycling
+      /*
       if (sequencer.IsPlaying()) {
         select_beat = sequencer.Next(beat_num_total);
 #ifdef DEBUG_SEQUENCER
@@ -676,13 +787,18 @@ void pwm_interrupt_handler()
                select_beat);
 #endif
       }
+      */
 
-      // hold button down to play that beat
+      // TEMPORARILY DISABLED: hold button down to play that beat
+      // This was overriding select_beat, preventing LED cycling
+      // TODO: Debug why button 1 (GPIO 5) reads as pressed when it's not
+      /*
       if (button_on < NUM_BUTTONS) {
         select_beat = (button_on + select_beat_freeze) % sample_beats;
         // record the current beat
         sequencer.Record(select_beat);
       }
+      */
 #ifdef DEBUG_PWM
       printf("select_beat:%d for %d samples\n", select_beat,
              retrigs[retrig_sel] << flag_half_time);
@@ -728,12 +844,18 @@ void pwm_interrupt_handler()
       for (uint8_t i = 0; i < 2; i++) {
         if (direction[i]) {
           phase_sample[i]++;
-          if (phase_sample[i] == raw_len(sample) - 1) {
+          uint32_t max_len = raw_len(sample);
+          if (phase_sample[i] >= max_len) {
+            // Debug: Print wraparound events
+            static uint32_t wrap_counter = 0;
+            if (++wrap_counter <= 5) {  // Print first 5 wraps
+              printf("[WRAP] phase[%d] wrapped from %lu to 0 (max=%lu)\n", i, phase_sample[i], max_len);
+            }
             phase_sample[i] = 0;
           }
         } else {
           if (phase_sample[i] == 0) {
-            phase_sample[i] = raw_len(sample) - 2;
+            phase_sample[i] = raw_len(sample) - 1;
           } else {
             phase_sample[i]--;
           }
@@ -1099,11 +1221,44 @@ int main(void) {
 
   // initialize bpm
   param_set_bpm(BPM_SAMPLED, bpm_set, beat_thresh, audio_clk_thresh);
+  
+  // Initialize sample tracking
+  sample = 0;
+  sample_beats = raw_beats(sample);  // Set to actual beat count (32 for amen break)
+  uint32_t sample_len = raw_len(sample);
+  printf("=== INITIALIZATION ===\n");
+  printf("  BPM: %d\n", bpm_set);
+  printf("  beat_thresh: %lu samples (%d ms)\n", beat_thresh, (beat_thresh * 1000) / SAMPLE_RATE);
+  printf("  audio_clk_thresh: %d\n", audio_clk_thresh);
+  printf("  sample: %d, sample_beats: %d, sample_len: %lu\n", sample, sample_beats, sample_len);
+  printf("  SAMPLES_PER_BEAT: %d\n", SAMPLES_PER_BEAT);
+  printf("  phase_sample[0]: %lu, phase_sample[1]: %lu\n", phase_sample[0], phase_sample[1]);
+  
+  // DIAGNOSTIC: Verify beat_thresh is correct
+  // Expected: ~8727 samples for 165 BPM at 48kHz
+  // Fast blinks (5x100ms) = beat_thresh OK (< 20000)
+  // Slow blinks (5x500ms) = beat_thresh WRONG (>= 20000)
+  printf("  DIAGNOSTIC: beat_thresh=%lu (%s)\n", 
+         beat_thresh, beat_thresh < 20000 ? "OK" : "TOO HIGH!");
+  printf("======================\n");
 
   // Initialize LEDs
 #if SHIFT_REGISTER_ENABLED == 1
   // Shift register LEDs (GPIO 22, 27, 28) - 16 LEDs via two cascaded 74HC595s
   ledarray.Init();
+  
+  // Test shift register LEDs - light each one in sequence
+  printf("Testing shift register LEDs...\n");
+  for (uint8_t i = 0; i < 8; i++) {
+    ledarray.Clear();
+    ledarray.Set(i, 1000);  // Full brightness
+    ledarray.Update();
+    printf("  LED %d on\n", i);
+    sleep_ms(200);
+  }
+  ledarray.Clear();
+  ledarray.Update();
+  printf("Shift register test complete\n");
 #elif I2S_AUDIO_ENABLED == 0
   // Legacy GPIO LEDs (GPIO 12-19) - disabled when I2S uses GPIO 18-19
   ledarray.Init();
@@ -1115,18 +1270,49 @@ int main(void) {
   // Setup LED for heartbeat
   gpio_init(LED_PIN);
   gpio_set_dir(LED_PIN, GPIO_OUT);
+  
+  // Test LED is working - blink 3 times
+  printf("Testing LED on GPIO %d...\n", LED_PIN);
+  for (int i = 0; i < 3; i++) {
+    gpio_put(LED_PIN, 1);
+    sleep_ms(200);
+    gpio_put(LED_PIN, 0);
+    sleep_ms(200);
+  }
+  printf("LED test complete\n");
+  
+  // DIAGNOSTIC: Clear visual indication of beat_thresh
+  // After 3 blinks: 1 sec pause, then:
+  // - LED SOLID ON for 2 sec = beat_thresh OK (< 20000)
+  // - LED STAYS OFF for 2 sec = beat_thresh WRONG 
+  sleep_ms(1000);  // Clear pause
+  if (beat_thresh < 20000) {
+    // SOLID ON = beat_thresh is correct (~8727)
+    gpio_put(LED_PIN, 1);
+    sleep_ms(2000);
+    gpio_put(LED_PIN, 0);
+    printf("DIAGNOSTIC: beat_thresh=%lu OK\n", beat_thresh);
+  } else {
+    // STAYS OFF = beat_thresh is WRONG
+    gpio_put(LED_PIN, 0);
+    sleep_ms(2000);
+    printf("DIAGNOSTIC: beat_thresh=%lu WRONG!\n", beat_thresh);
+  }
 
 #if I2S_AUDIO_ENABLED == 1
   // Initialize I2S audio output via PIO
   // Use pio1 (pio0 is used by WS2812 if enabled)
   // System clock is default 125 MHz - no need to change
+  printf("Initializing I2S audio...\n");
   i2s_audio.Init(SAMPLE_RATE, pio1, 0, I2S_DATA_PIN, I2S_BCK_PIN, I2S_LCK_PIN);
   i2s_audio.Start();
+  printf("I2S audio started\n");
   
   // Setup hardware timer for sample rate interrupt
   // Using negative period for precise timing
+  // CRITICAL: audio_timer must be static so it persists!
   int32_t timer_period_us = -(1000000 / SAMPLE_RATE);
-  struct repeating_timer audio_timer;
+  static struct repeating_timer audio_timer;
   bool timer_ok = add_repeating_timer_us(
       timer_period_us,
       audio_timer_callback,
@@ -1135,9 +1321,19 @@ int main(void) {
   );
   if (!timer_ok) {
     printf("ERROR: Failed to setup audio timer\n");
+    printf("ERROR: Audio will NOT work!\n");
+    // Blink LED rapidly to indicate error
+    while(1) {
+      gpio_put(LED_PIN, 1);
+      sleep_ms(100);
+      gpio_put(LED_PIN, 0);
+      sleep_ms(100);
+    }
   } else {
     printf("I2S Audio Timer: %d µs period (~%d Hz)\n", 
            -timer_period_us, 1000000 / -timer_period_us);
+    printf("Audio timer started successfully!\n");
+    printf("LED should now blink at 4 Hz if timer callback is working\n");
   }
 #else
   // Initialize PWM audio output
@@ -1177,10 +1373,19 @@ int main(void) {
   }
 
   // initialize knobs
+  // CRITICAL: Knobs use GPIO 26, 27, 28 for ADC. When shift register is enabled,
+  // GPIO 27 (SRCLK) and GPIO 28 (RCLK) are needed for shift register control.
+  // Calling adc_gpio_init() on these pins will reconfigure them as ADC inputs,
+  // which breaks shift register functionality!
+#if SHIFT_REGISTER_ENABLED == 0
   adc_init();
   for (uint8_t i = 0; i < NUM_KNOBS; i++) {
     input_knob[i].Init(i, 50);
   }
+  printf("Knobs initialized (GPIO 26, 27, 28 as ADC)\n");
+#else
+  printf("Knobs DISABLED (GPIO 27, 28 used by shift register)\n");
+#endif
 
   // initialize midi out
   midiout = MidiOut_malloc(0, true);
@@ -1261,12 +1466,34 @@ int main(void) {
   // setup usb
   tusb_init();
 
+  // CRITICAL: Force-reset state variables before main loop
+  printf("Initializing playback state...\n");
+  select_beat = 0;  // Start from first beat
+  beat_num_total = 0;
+  fx_retrig = false;
+  btn_retrig = false;
+  probability_retrig = 0;  // Disable random retrig
+  printf("  select_beat=%d, sample_beats=%d, fx_retrig=%d\n",
+         select_beat, sample_beats, fx_retrig?1:0);
+  printf("  SAMPLES_PER_BEAT=%d, beat_thresh=%lu\n",
+         SAMPLES_PER_BEAT, beat_thresh);
+
   // control loop
+  printf("Starting main control loop...\n");
+  uint32_t loop_counter = 0;
   while (1) {
+    loop_counter++;
     tud_task();
-    __wfi();  // Wait for Interrupt
-    clock_ms++;
-    clock_sync_ms++;
+    sleep_us(MAIN_LOOP_DELAY);  // Fixed 50us delay = 20kHz loop rate
+    
+    // Increment millisecond counter (20kHz / 20 = 1kHz = 1ms)
+    static uint16_t us_counter = 0;
+    us_counter += MAIN_LOOP_DELAY;
+    if (us_counter >= 1000) {
+      us_counter -= 1000;
+      clock_ms++;
+      clock_sync_ms++;
+    }
 
 #if MIDI_IN_ENABLED == 1
     Onewiremidi_receive(onewiremidi);
@@ -1473,6 +1700,8 @@ int main(void) {
       }
 
       // adc reading
+      // CRITICAL: Disabled when shift register is enabled (GPIO 27, 28 conflict)
+#if SHIFT_REGISTER_ENABLED == 0
       if (!btn_retrig) {
         for (uint8_t i = 0; i < NUM_KNOBS; i++) {
           input_knob[i].Read();
@@ -1729,6 +1958,7 @@ int main(void) {
           }
         }
       }
+#endif  // SHIFT_REGISTER_ENABLED == 0
       // adc reading end
     }
 
@@ -1749,10 +1979,16 @@ int main(void) {
       // this is used for calibration
       printf("%d\n", clock_sync_ms);
 #endif
+      // DISABLED: External clock sync was blocking internal beat detection
+      // The first iteration with GPIO 2 pull-down triggers false edge, setting
+      // is_syncing=true which permanently blocks beat_counter-based detection
+      // TODO: Initialize clock_pin_last to current GPIO state before main loop
+      /*
       if (syncing_clicks < 10) {
         syncing_clicks++;
         is_syncing = true;
       }
+      */
       do_sync_play = true;
       // this is from a calibration
       if (clock_sync_ms > 10000) {
@@ -1787,33 +2023,18 @@ int main(void) {
     // trig out
     output_trigger.Update();
 
-    if (ledarray_binary_debounce > 0) {
-      ledarray_binary_debounce--;
-      ledarray.SetBinary(ledarray_binary);
-    } else if (sequencer.IsRecording()) {
-      ledarray.Clear();
-      if (sequencer.Last() < 255) {
-        ledarray.Set(sequencer.Last() % NUM_BUTTONS, 10000);
-      }
-    } else {
-      ledarray.Clear();
-      if (ledarray_sel_debounce > 0) {
-        ledarray_sel_debounce--;
-        ledarray.Set(ledarray_sel, 950);
-      } else {
-        if (button_on < NUM_BUTTONS) {
-          ledarray.Add(button_on, 250);
-          if (button_on2 < NUM_BUTTONS) {
-            ledarray.Add(button_on2, 250);
-          }
-        } else {
-          ledarray.Add(select_beat % NUM_BUTTONS, 250);
-        }
-      }
-    }
+#if SHIFT_REGISTER_ENABLED == 1
+    // Display current beat position on shift register LEDs
+    // select_beat advances 0-31 for the amen break, we show (select_beat % 8)
+    // NOTE: Onboard LED is toggled in beat detection (audio_interrupt_handler)
+    // If onboard LED blinks at ~5.5 Hz = beat detection working
+    // If onboard LED stays solid = beat detection NOT firing
+    ledarray.Clear();
+    
+    uint8_t led_index = select_beat % 8;
+    ledarray.Set(led_index, 1000);  // Full brightness
+    
     ledarray.Update();
-
-    // sleep this thread
-    sleep_us(MAIN_LOOP_DELAY);
+#endif
   }
 }
