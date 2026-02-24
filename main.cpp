@@ -50,6 +50,7 @@
 #include "doth/runningavg.h"
 #include "doth/sequencer.h"
 #include "doth/trigger_out.h"
+
 #if I2S_AUDIO_ENABLED == 1
 #include "doth/i2s_audio.h"
 #endif
@@ -1217,42 +1218,17 @@ int main(void) {
 
   // Initialize LEDs
 #if SHIFT_REGISTER_ENABLED == 1
-  // Shift register LEDs (GPIO 22, 27, 28) - 16 LEDs via two cascaded 74HC595s
   ledarray.Init();
-  
-  // Test shift register LEDs - light each one in sequence
-  printf("Testing shift register LEDs...\n");
-  for (uint8_t i = 0; i < 8; i++) {
-    ledarray.Clear();
-    ledarray.Set(i, 1000);  // Full brightness
-    ledarray.Update();
-    printf("  LED %d on\n", i);
-    sleep_ms(200);
-  }
-  ledarray.Clear();
-  ledarray.Update();
-  printf("Shift register test complete\n");
 #elif I2S_AUDIO_ENABLED == 0
-  // Legacy GPIO LEDs (GPIO 12-19) - disabled when I2S uses GPIO 18-19
   ledarray.Init();
 #else
-  // LEDs disabled (I2S enabled and no shift register)
   printf("LEDs disabled: I2S audio uses conflicting GPIO pins\n");
 #endif
 
   // Setup LED for heartbeat
   gpio_init(LED_PIN);
   gpio_set_dir(LED_PIN, GPIO_OUT);
-  
-  // Test LED is working - blink 3 times
-  printf("Testing LED on GPIO %d...\n", LED_PIN);
-  for (int i = 0; i < 3; i++) {
-    gpio_put(LED_PIN, 1);
-    sleep_ms(200);
-    gpio_put(LED_PIN, 0);
-    sleep_ms(200);
-  }
-  printf("LED test complete\n");
+  // Removed onboard LED blink at startup
 
 #if I2S_AUDIO_ENABLED == 1
   // Initialize I2S audio output via PIO
