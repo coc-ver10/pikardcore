@@ -34,7 +34,7 @@ The objective of the 16 knobs is to provide **direct access to all controls** wi
 
 | Knob # | Function | Description | Status |
 |--------|----------|-------------|--------|
-| I11 | TEMPO | BPM control (50-360 BPM) | To implement |
+| I11 | TEMPO | BPM control (50-360 BPM) | ✅ **DONE** |
 | I8 | GATE | Noise gate threshold (auto fade-out after silence) | To implement |
 | I3 | JUMP PROB | Jump probability (random beat jumping) | To implement |
 | I1 | TUNNEL PROB | Tunnel probability (random sample switching) | To implement |
@@ -44,7 +44,7 @@ The objective of the 16 knobs is to provide **direct access to all controls** wi
 | I5 | BREAK | Break effects macro (combines multiple effects) | To implement |
 | I7 | STRETCH | Time stretch / pitch shift control | To implement |
 | I6 | FILTER | Low-pass filter cutoff (46 positions, biquad IIR) | To implement |
-| I10 | VOLUME / FOLD | 0-2k: volume↓, 2-3k: normal, 3-4k: distortion | ✅ **DONE** |
+| I10 | VOLUME / FOLD | 0-2048: volume↓, 2048: normal, 2049-4095: disto | ✅ **DONE** |
 | I4 | SAMPLE | Sample selection (switch between audio files) | To implement |
 | I12 | X4 | **To be defined** (reserved for future expansion) | Reserved |
 | I13 | X3 | **To be defined** (reserved for future expansion) | Reserved |
@@ -169,13 +169,20 @@ LEDs use **cascaded 74HC595** shift registers:
 - Startup delay: 800 cycles per channel
 
 **Implemented Knobs:**
-- ✅ **I10 (VOLUME/FOLD)**: Volume reduction (0-2k) → Normal (2-3k) → Wave-folding distortion (3-4k)
-  - Distortion uses ×7 gain amplification + multiple wave folds
+- ✅ **I10 (VOLUME/FOLD)**: Continuous transition across full ADC range
+  - 0-2047: Volume reduction (progressive volume↓)
+  - 2048: Normal volume (center point)
+  - 2049-4095: Wave-folding distortion (×7 gain + progressive fold)
   - Adapted for 16-bit signed audio (int16_t)
   - Direct ADC reading (no inversion needed for multiplexer)
+- ✅ **I11 (TEMPO)**: BPM control mapped from ADC (0-4095) to 50-360 BPM
+  - Linear mapping: bpm = (value * 310 / 4095) + 50
+  - Updates beat_thresh for audio timing
+  - Saves to flash memory (SAVE_BPM)
+  - LED binary display shows BPM-50 (0-310 range)
 
-**To Implement** (15 channels remaining):
-- I0-I9, I11: Core effects (probabilities, tempo, gate, filter, etc.)
+**To Implement** (14 channels remaining):
+- I0-I9: Core effects (probabilities, gate, filter, sample, break, stretch, etc.)
 - I12-I15: Reserved for future features
 
 **Code Location:**
@@ -211,15 +218,18 @@ LEDs use **cascaded 74HC595** shift registers:
 | I7 | STRETCH | 0-255 | Time-stretch / pitch-shift du sample | To implement |
 | I8 | GATE | 0-4*BEAT | Seuil du noise gate (auto fade-out) | To implement |
 | I9 | GATE PROB | 0-254 | Probabilité de silence (gate probability) | To implement |
-| I10 | VOLUME / FOLD | 0-4095 | 0-2000: volume↓, 2000-3000: normal, 3000-4095: distortion | ✅ **DONE** |
-| I11 | TEMPO | 50-360 BPM | Tempo du séquenceur (BPM) | To implement |
+| I10 | VOLUME / FOLD | 0-4095 | 0-2047: volume↓, 2048: normal, 2049-4095: distortion | ✅ **DONE** |
+| I11 | TEMPO | 50-360 BPM | Tempo du séquenceur (BPM) | ✅ **DONE** |
 | I12 | X4 | - | À définir (réservé pour extension) | Reserved |
 | I13 | X3 | - | À définir (réservé pour extension) | Reserved |
 | I14 | X2 | - | À définir (réservé pour extension) | Reserved |
 | I15 | X1 | - | À définir (réservé pour extension) | Reserved |
 
 **Notes d'implémentation :**
-- **I10 (VOLUME/FOLD)** ✅ : Implémenté avec wave-folding distortion (gain ×7 max) pour audio 16-bit
+- **I10 (VOLUME/FOLD)** ✅ : Transition progressive continue sur toute la plage ADC (0-2048-4095)
+  - Point central à 2048 = volume normal (pas de zone morte)
+  - Wave-folding distortion avec gain ×7 max pour audio 16-bit
+- **I11 (TEMPO)** ✅ : Mapping linéaire ADC→BPM: `bpm = (value * 310 / 4095) + 50`
 - Tous les autres canaux : en attente d'implémentation progressive
 - Les probabilités utilisent une valeur 0-254 (0 = jamais, 254 = presque toujours)
 - Le filtre utilise 46 positions discrètes (fréquences MIDI notes calculées par biquad.py)

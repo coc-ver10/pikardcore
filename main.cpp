@@ -318,13 +318,19 @@ void param_set_bpm(uint16_t bpm, uint16_t &bpm_set_, uint32_t &beat_thresh_,
 
 void param_set_volume(uint16_t knobval, uint8_t &distortion_,
                       uint8_t &volume_reduce_) {
-  if (knobval < 2000) {
+  // Continuous transition using full ADC range (0-4095)
+  // Center point at 2048 = normal volume (no reduction, no distortion)
+  
+  if (knobval < 2048) {
+    // Left half: volume reduction increases as knob goes left
     distortion_ = 0;
-    volume_reduce_ = (2000 - knobval) * (VOLUME_REDUCE_MAX + 3) / 2000;
-  } else if (knobval > 3000) {
+    volume_reduce_ = (2048 - knobval) * (VOLUME_REDUCE_MAX + 3) / 2048;
+  } else if (knobval > 2048) {
+    // Right half: distortion increases as knob goes right
     volume_reduce_ = 0;
-    distortion_ = (knobval - 3000) * DISTORTION_MAX / (4095 - 3000);
+    distortion_ = (knobval - 2048) * DISTORTION_MAX / (4095 - 2048);
   } else {
+    // Exact center: normal volume
     volume_reduce_ = 0;
     distortion_ = 0;
   }
@@ -1993,6 +1999,7 @@ int main(void) {
       if (!btn_retrig) {
         // Channel mapping (according to target_architecture.md)
         const uint8_t KNOB_I10_VOLUME = 10;
+        const uint8_t KNOB_I11_TEMPO = 11;
         
         // Read I10 (VOLUME/FOLD)
         knob_mux.Read(KNOB_I10_VOLUME);
@@ -2010,6 +2017,38 @@ int main(void) {
 #ifdef DEBUG_KNOB
           printf("I10 (VOLUME): %d\n", knob_value);
 #endif
+        }
+        
+        // Read I11 (TEMPO)
+        knob_mux.Read(KNOB_I11_TEMPO);
+        
+        if (knob_mux.Changed(KNOB_I11_TEMPO)) {
+          uint16_t knob_value = knob_mux.Value(KNOB_I11_TEMPO);
+          
+          // Map ADC value (0-4095) to BPM range (50-360)
+          uint16_t bpm_new = (knob_value * 310 / 4095) + 50;
+          
+          // Clamp to valid range
+          if (bpm_new > 360) bpm_new = 360;
+          if (bpm_new < 50) bpm_new = 50;
+          
+          // Only update if changed
+          if (bpm_new != bpm_set) {
+            // Update BPM and beat threshold
+            param_set_bpm(bpm_new, bpm_set, beat_thresh, audio_clk_thresh);
+            
+            // Save to flash
+            save_data[SAVE_BPM] = (uint8_t)(bpm_new >> 8);
+            save_data[SAVE_BPM + 1] = (uint8_t)bpm_new;
+            
+            // Update LED display (binary representation)
+            ledarray_binary_debounce = 48000;
+            ledarray_binary = bpm_new - 50;  // Display 0-310 range
+            
+#ifdef DEBUG_KNOB
+            printf("I11 (TEMPO): %d BPM (knob=%d)\n", bpm_new, knob_value);
+#endif
+          }
         }
       }
 #endif  // SHIFT_REGISTER_ENABLED == 1
