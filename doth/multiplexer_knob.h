@@ -64,7 +64,7 @@ class MultiplexerKnob {
   // Read ADC value from currently selected channel
   uint16_t ReadADC() {
     adc_select_input(0);  // Select ADC0 (GPIO26)
-    return 4095 - adc_read();  // Inverted like original Knob class
+    return adc_read();  // Direct reading (multiplexer wiring is opposite of legacy knobs)
   }
 
  public:

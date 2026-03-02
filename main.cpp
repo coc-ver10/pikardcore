@@ -45,6 +45,7 @@
 #include "doth/audio2h.h"
 #include "doth/button.h"
 #include "doth/multiplexer_button.h"
+#include "doth/multiplexer_knob.h"
 #include "doth/delay.h"
 #include "doth/easing.h"
 #include "doth/filter.h"
@@ -140,6 +141,7 @@ const uint8_t *flash_target_contents =
 // inputs
 MultiplexerButton input_button[NUM_BUTTONS];
 Knob input_knob[NUM_KNOBS];
+MultiplexerKnob knob_mux;  // 16-channel knob multiplexer
 
 // outputs
 LEDArray ledarray;
@@ -321,10 +323,10 @@ void param_set_volume(uint16_t knobval, uint8_t &distortion_,
     volume_reduce_ = (2000 - knobval) * (VOLUME_REDUCE_MAX + 3) / 2000;
   } else if (knobval > 3000) {
     volume_reduce_ = 0;
-    distortion = (knobval - 3000) * DISTORTION_MAX / (4095 - 3000);
+    distortion_ = (knobval - 3000) * DISTORTION_MAX / (4095 - 3000);
   } else {
     volume_reduce_ = 0;
-    distortion = 0;
+    distortion_ = 0;
   }
 }
 
@@ -992,6 +994,31 @@ void pwm_interrupt_handler()
     }
     // </volume>
 
+    // <distortion>
+    // Wave-folding distortion for 16-bit signed audio
+    if (distortion > 0) {
+      // First amplify the signal (gain proportional to distortion level)
+      // distortion range: 0-30 (DISTORTION_MAX), so gain from 1.0x to ~7.0x
+      int32_t gained = (int32_t)audio_now * (100 + distortion * 20) / 100;
+      
+      // Apply wave folding at 16-bit boundaries
+      const int32_t MAX_16 = 32767;
+      const int32_t MIN_16 = -32768;
+      
+      // Multiple folds if signal exceeds boundaries
+      while (gained > MAX_16 || gained < MIN_16) {
+        if (gained > MAX_16) {
+          gained = 2 * MAX_16 - gained;  // Fold down from top
+        }
+        if (gained < MIN_16) {
+          gained = 2 * MIN_16 - gained;  // Fold up from bottom
+        }
+      }
+      
+      audio_now = (int16_t)gained;
+    }
+    // </distortion>
+
     // <bitcrush>
     // Bitcrush adapted for 16-bit signed audio (center is 0, not 128)
     if (bitcrush > 0) {
@@ -1346,6 +1373,11 @@ int main(void) {
   printf("Knobs initialized (GPIO 26, 27, 28 as ADC)\n");
 #else
   printf("Knobs DISABLED (GPIO 27, 28 used by shift register)\n");
+  
+  // Initialize 16-channel knob multiplexer (74HC4067)
+  // GPIO 26 (ADC0) = COM, GPIO 14-17 = S0-S3 (shared with button multiplexer)
+  knob_mux.Init(200);  // alpha smoothing factor = 200
+  printf("16-channel knob multiplexer initialized (GPIO 26 COM, GPIO 14-17 select)\n");
 #endif
 
   // initialize midi out
@@ -1954,6 +1986,33 @@ int main(void) {
       }
 #endif  // SHIFT_REGISTER_ENABLED == 0
       // adc reading end
+
+#if SHIFT_REGISTER_ENABLED == 1
+      // NEW: Read multiplexed knobs (74HC4067)
+      // Starting with I10 (VOLUME/FOLD) - progressively add more knobs
+      if (!btn_retrig) {
+        // Channel mapping (according to target_architecture.md)
+        const uint8_t KNOB_I10_VOLUME = 10;
+        
+        // Read I10 (VOLUME/FOLD)
+        knob_mux.Read(KNOB_I10_VOLUME);
+        
+        if (knob_mux.Changed(KNOB_I10_VOLUME)) {
+          uint16_t knob_value = knob_mux.Value(KNOB_I10_VOLUME);
+          
+          // Update volume/distortion via param_set_volume
+          param_set_volume(knob_value, distortion, volume_reduce);
+          
+          // Save to flash
+          save_data[SAVE_VOLUME] = (uint8_t)(knob_value >> 8);
+          save_data[SAVE_VOLUME + 1] = (uint8_t)knob_value;
+          
+#ifdef DEBUG_KNOB
+          printf("I10 (VOLUME): %d\n", knob_value);
+#endif
+        }
+      }
+#endif  // SHIFT_REGISTER_ENABLED == 1
     }
 
 #if MIDI_IN_ENABLED == 0
