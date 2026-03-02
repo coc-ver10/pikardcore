@@ -1,6 +1,6 @@
 // I2S Audio Output Module
 // Provides interrupt-driven I2S audio output via PIO
-// Converts 8-bit unsigned audio to 16-bit signed stereo I2S
+// Converts 16-bit signed audio to stereo I2S
 
 #ifndef I2S_AUDIO_H
 #define I2S_AUDIO_H
@@ -33,9 +33,9 @@ public:
     void Init(uint32_t sample_rate, PIO pio_instance, uint state_machine,
               uint data_pin_, uint bck_pin_, uint lck_pin_);
     
-    // Convert 8-bit sample to 16-bit and output to both L/R channels
-    // sample_8bit: Unsigned 8-bit audio (0-255, 128=silence)
-    void WriteSample(uint8_t sample_8bit);
+    // Output 16-bit signed sample to both L/R channels
+    // sample_16bit: Signed 16-bit audio (-32768 to +32767, 0=silence)
+    void WriteSample(int16_t sample_16bit);
     
     // Check if FIFO has space
     // Returns true if we can write without blocking

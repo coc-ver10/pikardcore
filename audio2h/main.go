@@ -118,10 +118,10 @@ func audio2h(files []File) (err error) {
 	sb.WriteString(fmt.Sprintf("#define RAW_DUMMY_SAMPLES %d\n", silentBytes))
 	sb.WriteString(fmt.Sprintf("#define RAW_DUMMY_START %d\n", sampleStart))
 	sampleStart += silentBytes
-	sbd.WriteString(fmt.Sprintf("const uint8_t __in_flash() raw_audio[] = {\n"))
+	sbd.WriteString(fmt.Sprintf("const int16_t __in_flash() raw_audio[] = {\n"))
 	intsDummy := make([]int, silentBytes)
 	for i, _ := range intsDummy {
-		intsDummy[i] = 128
+		intsDummy[i] = 0  // 16-bit silence is 0, not 128
 	}
 	sbd.WriteString(printInts(intsDummy))
 	for i, f := range files {
@@ -148,7 +148,7 @@ func audio2h(files []File) (err error) {
 	sb.WriteString("\n\n")
 	sb.WriteString(sbd.String())
 
-	sb.WriteString("char raw_val(int s, int i) {\n")
+	sb.WriteString("int16_t raw_val(int s, int i) {\n")
 	for i := range files {
 		sb.WriteString(fmt.Sprintf("\tif (s==%d) return raw_audio[i+RAW_%d_START];\n", i, i))
 		if i == limit {
@@ -185,7 +185,8 @@ func printInts(ints []int) (s string) {
 	var sb strings.Builder
 	sb.WriteString("\t")
 	for i, v := range ints {
-		sb.WriteString(fmt.Sprintf("0x%02x", v))
+		// Format as signed 16-bit value
+		sb.WriteString(fmt.Sprintf("%d", int16(v)))
 		if i < len(ints)-1 {
 			sb.WriteString(", ")
 		}
@@ -275,8 +276,8 @@ func convertFiles(files []File) (err error) {
 		if lpf > 19000 {
 			lpf = 19000
 		}
-		log.Tracef("%s", strings.Join([]string{"sox", f.Pathname, "-r", fmt.Sprint(int(flagSR)), "-c", "1", "-b", "8", f.Converted, "speed", fmt.Sprintf("%2.6f", flagBPM/f.BPM), "lowpass", fmt.Sprint(lpf), "norm", "gain", "-6"}, " "))
-		cmd := exec.Command("sox", f.Pathname, "-r", fmt.Sprint(int(flagSR)), "-c", "1", "-b", "8", f.Converted, "speed", fmt.Sprintf("%2.6f", flagBPM/f.BPM), "highpass", "5", "lowpass", fmt.Sprint(lpf), "gain", "-6", "norm", "-3", "dither")
+		log.Tracef("%s", strings.Join([]string{"sox", f.Pathname, "-r", fmt.Sprint(int(flagSR)), "-c", "1", "-b", "16", f.Converted, "speed", fmt.Sprintf("%2.6f", flagBPM/f.BPM), "lowpass", fmt.Sprint(lpf), "norm", "gain", "-6"}, " "))
+		cmd := exec.Command("sox", f.Pathname, "-r", fmt.Sprint(int(flagSR)), "-c", "1", "-b", "16", f.Converted, "speed", fmt.Sprintf("%2.6f", flagBPM/f.BPM), "highpass", "5", "lowpass", fmt.Sprint(lpf), "gain", "-6", "norm", "-3", "dither")
 		stdoutStderr, err := cmd.CombinedOutput()
 		if err != nil {
 			log.Errorf("cmd failed: \n%s", stdoutStderr)

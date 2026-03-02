@@ -43,13 +43,11 @@ void I2SAudio::Init(uint32_t sample_rate_, PIO pio_instance, uint state_machine,
 #endif
 }
 
-void I2SAudio::WriteSample(uint8_t sample_8bit) {
+void I2SAudio::WriteSample(int16_t sample_16bit) {
     if (!initialized) return;
     
-    // Convert 8-bit unsigned (0-255, center at 128) to 16-bit signed
-    // 8-bit: 0 = most negative, 128 = silence, 255 = most positive
-    // 16-bit: -32768 = most negative, 0 = silence, +32767 = most positive
-    int16_t sample_16bit = ((int16_t)sample_8bit - 128) << 8;
+    // Reduce volume by 50% (shift right by 1)
+    sample_16bit = sample_16bit >> 1;
     
     // Create 32-bit I2S data: [Left 16-bit][Right 16-bit]
     // Duplicate mono to both channels

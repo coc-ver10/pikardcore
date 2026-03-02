@@ -137,7 +137,7 @@ I2SAudio i2s_audio;
 #endif
 
 // audio tracking
-uint8_t audio_now = 0;
+int16_t audio_now = 0;
 uint8_t audio_clk = 0;
 uint8_t audio_clk_thresh = 48;
 bool do_mute = false;
@@ -400,14 +400,15 @@ void pwm_interrupt_handler()
     led_counter = 0;
   }
   
-  uint8_t test_audio = sine_table[table_index];
+  // Convert 8-bit sine table to 16-bit for testing
+  int16_t test_audio = ((int16_t)sine_table[table_index] - 128) << 8;
   
 #if I2S_AUDIO_ENABLED == 1
   if (i2s_audio.CanWrite()) {
     i2s_audio.WriteSample(test_audio);
   }
 #else
-  pwm_set_gpio_level(AUDIO_PIN, test_audio);
+  pwm_set_gpio_level(AUDIO_PIN, sine_table[table_index]);
 #endif
   return;  // Skip all normal audio processing
 #endif
@@ -923,67 +924,35 @@ void pwm_interrupt_handler()
       phase_xfade--;
 
       // new head
-      uint32_t u = (uint32_t)raw_val(sample, phase_sample[phase_head]);
+      int32_t u = (int32_t)raw_val(sample, phase_sample[phase_head]);
       u = u * ((1 << HEAD_SHIFT) - phase_xfade);  // fade it in
 
       // old head
-      uint32_t v = (uint32_t)raw_val(sample, phase_sample[1 - phase_head]);
+      int32_t v = (int32_t)raw_val(sample, phase_sample[1 - phase_head]);
       v = v * phase_xfade;  // fade it out
 
       // combine
       u = (u + v) >> HEAD_SHIFT;
 
       // set to audio now
-      audio_now = (uint8_t)u;
+      audio_now = (int16_t)u;
       // if (phase_xfade == 1 << HEAD_SHIFT - 1) {
       //   // printf("\nphase_head: %d; audio_now=%d\n", phase_head, u);
       // }
     }
 
     // <volume>
-    if (volume_reduce >= VOLUME_REDUCE_MAX) audio_now = 128;
-    if (audio_now != 128) {
-      // distortion / wave-folding
-      if (distortion > 0) {
-        if (audio_now > 128) {
-          if (audio_now < (255 - distortion)) {
-            audio_now += distortion;
-          } else {
-            audio_now = 255 - distortion;
-          }
-          audio_now = 128 + ((audio_now - 128) / ((distortion >> 4) + 1));
-        } else {
-          if (audio_now > distortion) {
-            audio_now -= distortion;
-          } else {
-            audio_now = distortion - audio_now;
-          }
-          audio_now = 128 - ((128 - audio_now) / ((distortion >> 4) + 1));
-        }
-      }
-      // reduce volume
-      if (volume_reduce > 0) {
-        if (audio_now > 128) {
-          audio_now = audio_now - (volume_reduce);
-          if (audio_now < 128) audio_now = 128;
-        } else {
-          audio_now = audio_now + (volume_reduce);
-          if (audio_now > 128) audio_now = 128;
-        }
-      }
-      if ((volume_mod + retrig_volume_reduce + noise_gate_fade) > 0 &&
-          audio_now != 128) {
-        if (audio_now > 128) {
-          audio_now = ((audio_now - 128) >>
-                       (volume_mod + retrig_volume_reduce + noise_gate_fade)) +
-                      128;
-        } else {
-          audio_now =
-              128 - ((128 - audio_now) >>
-                     (volume_mod + retrig_volume_reduce + noise_gate_fade));
-        }
-      }
-    }  // </volume>
+    // TODO: Adapt volume/distortion effects for 16-bit audio
+    if (volume_reduce >= VOLUME_REDUCE_MAX) audio_now = 0;  // silence is 0 in 16-bit
+    
+    // Simple volume reduction for now (shift right)
+    if (volume_reduce > 0) {
+      audio_now = audio_now >> (volume_reduce / 4);
+    }
+    if ((volume_mod + retrig_volume_reduce + noise_gate_fade) > 0) {
+      audio_now = audio_now >> (volume_mod + retrig_volume_reduce + noise_gate_fade);
+    }
+    // </volume>
 
     // <bitcrush>
     // if (bitcrush > 0) {
@@ -996,15 +965,16 @@ void pwm_interrupt_handler()
     // </bitcrush>
 
     // <filter>
-    if ((filter_fc - (retrig_filter * retrig_filter_change) - button_filter) <=
-        LPF_MAX) {
-      audio_now = (uint8_t)filter_lpf(
-          (int64_t)audio_now,
-          (filter_fc - (retrig_filter * retrig_filter_change) - button_filter),
-          filter_q);
-      // } else {
-      // audio_now = (uint8_t)filter_lpf((int64_t)audio_now, LPF_MAX, filter_q);
-    }
+    // TODO: Adapt filter for 16-bit audio
+    // if ((filter_fc - (retrig_filter * retrig_filter_change) - button_filter) <=
+    //     LPF_MAX) {
+    //   audio_now = (uint8_t)filter_lpf(
+    //       (int64_t)audio_now,
+    //       (filter_fc - (retrig_filter * retrig_filter_change) - button_filter),
+    //       filter_q);
+    //   // } else {
+    //   // audio_now = (uint8_t)filter_lpf((int64_t)audio_now, LPF_MAX, filter_q);
+    // }
     // </filter>
 
     // <delay>
