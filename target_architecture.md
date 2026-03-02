@@ -32,26 +32,32 @@ The objective of the 16 knobs is to provide **direct access to all controls** wi
 
 **Pikardcore Mapping** (16 knobs - one knob per parameter):
 
-| Knob # | Function | Description |
-|--------|----------|-------------|
-| I11 | TEMPO | BPM control (50-360 BPM) |
-| I8 | GATE | Noise gate threshold |
-| I3 | JUMP PROB | Jump probability |
-| I1 | TUNNEL PROB | Tunnel probability (sample switching) |
-| I0 | REVERSE PROB | Direction change probability |
-| I9 | GATE PROB | Gate probability |
-| I2 | RETRIG PROB | Retrigger probability |
-| I5 | BREAK | Break effects macro |
-| I7 | STRETCH | Time stretch control |
-| I6 | FILTER | Low-pass filter cutoff (46 positions) |
-| I10 | VOLUME / FOLD | Volume and wave-folding distortion |
-| I4 | SAMPLE | Sample selection |
-| I12-I15 | X4-X1 | **To be defined** (4 knobs remaining) |
+| Knob # | Function | Description | Status |
+|--------|----------|-------------|--------|
+| I11 | TEMPO | BPM control (50-360 BPM) | To implement |
+| I8 | GATE | Noise gate threshold (auto fade-out after silence) | To implement |
+| I3 | JUMP PROB | Jump probability (random beat jumping) | To implement |
+| I1 | TUNNEL PROB | Tunnel probability (random sample switching) | To implement |
+| I0 | REVERSE PROB | Reverse probability (playback direction change) | To implement |
+| I9 | GATE PROB | Gate probability (random silence) | To implement |
+| I2 | RETRIG PROB | Retrigger probability (stutter effect) | To implement |
+| I5 | BREAK | Break effects macro (combines multiple effects) | To implement |
+| I7 | STRETCH | Time stretch / pitch shift control | To implement |
+| I6 | FILTER | Low-pass filter cutoff (46 positions, biquad IIR) | To implement |
+| I10 | VOLUME / FOLD | 0-2k: volume↓, 2-3k: normal, 3-4k: distortion | ✅ **DONE** |
+| I4 | SAMPLE | Sample selection (switch between audio files) | To implement |
+| I12 | X4 | **To be defined** (reserved for future expansion) | Reserved |
+| I13 | X3 | **To be defined** (reserved for future expansion) | Reserved |
+| I14 | X2 | **To be defined** (reserved for future expansion) | Reserved |
+| I15 | X1 | **To be defined** (reserved for future expansion) | Reserved |
 
 **Implementation:**
 - Interfaced via **74HC4067 16-channel multiplexer**
-- Common pin: GPIO26 (ADC capable)
-- Select pins: GPIO14-17 (S0-S3)
+- Common pin: GPIO26 (ADC0 capable)
+- Select pins: GPIO14-17 (S0-S3, shared with button multiplexer)
+- Values: 12-bit ADC (0-4095)
+- Change detection: threshold = 100 (prevents noise)
+- Startup delay: 800 cycles per channel
 
 ### 16 Buttons - Beat Selection + Additional Controls
 
@@ -153,6 +159,30 @@ LEDs use **cascaded 74HC595** shift registers:
 - **Pikardcore:** 16 + 16 + 16 = 48 controls/outputs
 - **Achieved with:** ~15 GPIO pins (multiplexing saves ~33 pins)
 
+### Knob Multiplexer Implementation Status
+
+**Infrastructure** (✅ Complete):
+- `MultiplexerKnob` class in `doth/multiplexer_knob.h`
+- GPIO initialization (GPIO26 ADC + GPIO14-17 select)
+- Channel selection with 10μs settling time
+- 12-bit ADC reading with change detection (threshold: 100)
+- Startup delay: 800 cycles per channel
+
+**Implemented Knobs:**
+- ✅ **I10 (VOLUME/FOLD)**: Volume reduction (0-2k) → Normal (2-3k) → Wave-folding distortion (3-4k)
+  - Distortion uses ×7 gain amplification + multiple wave folds
+  - Adapted for 16-bit signed audio (int16_t)
+  - Direct ADC reading (no inversion needed for multiplexer)
+
+**To Implement** (15 channels remaining):
+- I0-I9, I11: Core effects (probabilities, tempo, gate, filter, etc.)
+- I12-I15: Reserved for future features
+
+**Code Location:**
+- Knob multiplexer class: `doth/multiplexer_knob.h`
+- Knob reading logic: `main.cpp` lines ~1970-1990 (inside `#if SHIFT_REGISTER_ENABLED == 1`)
+- Distortion processing: `main.cpp` lines ~997-1019 (audio interrupt handler)
+
 ---
 
 # GPIO Pin Mappings
@@ -169,24 +199,30 @@ LEDs use **cascaded 74HC595** shift registers:
 
 ### Multiplexer Inputs (Potentiometers)
 
-| Input | Function | Notes |
-| --- | --- | --- |
-| I0 | REVERSE PROB |probability_direction (reverse) |
-| I1 | TUNNEL PROB | probability_tunnel|
-| I2 | RETRIG PROB | probability_retrig|
-| I3 | JUMP PROB |probability_jump |
-| I4 | SAMPLE |sample (sélection d’échantillon) |
-| I5 | BREAK |macro FX “break” (param_set_break) |
-| I6 | FILTER |Low-Pass Filter (biquad IIR, filter.h) |
-| I7 | STRETCH |stretch_change |
-| I8 | GATE |noise_gate_thresh (seuil gate) |
-| I9 | GATE PROB | probability_gate|
-| I10 | VOLUME / FOLD | volume (via param_set_volume)|
-| I11 | TEMPO |tempo (BPM) |
-| I12 | X4 | to define |
-| I13 | X3 | to define |
-| I14 | X2 | to define |
-| I15 | X1 | to define |
+| Input | Function | Range | Effect Description | Status |
+| --- | --- | --- | --- | --- |
+| I0 | REVERSE PROB | 0-254 | Probabilité de lecture inverse (reverse playback) | To implement |
+| I1 | TUNNEL PROB | 0-254 | Probabilité de saut entre samples (sample switching) | To implement |
+| I2 | RETRIG PROB | 0-254 | Probabilité de re-déclenchement (retrigger) | To implement |
+| I3 | JUMP PROB | 0-254 | Probabilité de saut dans le sample (beat jumping) | To implement |
+| I4 | SAMPLE | 0-NUM_SAMPLES | Sélection d'échantillon audio | To implement |
+| I5 | BREAK | 0-4095 | Macro FX "break" (combine distortion + probabilities) | To implement |
+| I6 | FILTER | 0-LPF_MAX (46) | Fréquence de coupure filtre passe-bas (biquad IIR) | To implement |
+| I7 | STRETCH | 0-255 | Time-stretch / pitch-shift du sample | To implement |
+| I8 | GATE | 0-4*BEAT | Seuil du noise gate (auto fade-out) | To implement |
+| I9 | GATE PROB | 0-254 | Probabilité de silence (gate probability) | To implement |
+| I10 | VOLUME / FOLD | 0-4095 | 0-2000: volume↓, 2000-3000: normal, 3000-4095: distortion | ✅ **DONE** |
+| I11 | TEMPO | 50-360 BPM | Tempo du séquenceur (BPM) | To implement |
+| I12 | X4 | - | À définir (réservé pour extension) | Reserved |
+| I13 | X3 | - | À définir (réservé pour extension) | Reserved |
+| I14 | X2 | - | À définir (réservé pour extension) | Reserved |
+| I15 | X1 | - | À définir (réservé pour extension) | Reserved |
+
+**Notes d'implémentation :**
+- **I10 (VOLUME/FOLD)** ✅ : Implémenté avec wave-folding distortion (gain ×7 max) pour audio 16-bit
+- Tous les autres canaux : en attente d'implémentation progressive
+- Les probabilités utilisent une valeur 0-254 (0 = jamais, 254 = presque toujours)
+- Le filtre utilise 46 positions discrètes (fréquences MIDI notes calculées par biquad.py)
 
 ## MULTIPLEXER KEYBOARD
 
