@@ -4,6 +4,12 @@
 
 #include <cmath>
 
+// Debug flags (LED blink when retrigger detected - no serial needed)
+#define DEBUG_RETRIGGER_LED 1  // Blink LED rapidly during retrigger
+// #define DEBUG_RETRIGGER 1  // Debug retrigger detection (serial)
+// #define DEBUG_BUTTONS 1  // Enable button debugging (requires serial connection)
+// #define DEBUG_BUTTONS_LED 1  // Blink LED when buttons pressed (no serial needed)
+
 // pico files
 #include "hardware/adc.h"  // adc_read
 #include "hardware/clocks.h"
@@ -38,6 +44,7 @@
 // pikocore files
 #include "doth/audio2h.h"
 #include "doth/button.h"
+#include "doth/multiplexer_button.h"
 #include "doth/delay.h"
 #include "doth/easing.h"
 #include "doth/filter.h"
@@ -58,8 +65,15 @@
 
 // constants
 #define SYSTEM_CLOCK_KHZ 125000  // 125 MHz (default RP2040 clock)
-#define NUM_BUTTONS 8
+#define NUM_BUTTONS 16  // 16 buttons via 74HC4067 multiplexer
 #define NUM_KNOBS 3
+
+// Button multiplexer GPIO pins (74HC4067)
+#define BTN_MUX_COM  21  // Common pin (button input)
+#define BTN_MUX_S0   14  // Select bit 0
+#define BTN_MUX_S1   15  // Select bit 1
+#define BTN_MUX_S2   16  // Select bit 2
+#define BTN_MUX_S3   17  // Select bit 3
 
 #if SHIFT_REGISTER_ENABLED == 1
 #define NUM_LEDS 16  // Two cascaded shift registers: 16 LEDs
@@ -88,7 +102,7 @@
 #define RESET_IN_PIN 3   // reset in pin 
 #define CLOCK_OUT_PIN 4  // clock out pin
 #define RESET_OUT_PIN 5  // reset out pin
-#define TRIGO_PIN 21     // trigger out pin (legacy, may conflict with keyboard mux)
+#define TRIGO_PIN 10     // trigger out pin (moved from 21, which is now button mux COM)
 #define MAIN_LOOP_HZ 4
 #define MAIN_LOOP_DELAY 50
 
@@ -124,7 +138,7 @@ const uint8_t *flash_target_contents =
     (const uint8_t *)(XIP_BASE + FLASH_TARGET_OFFSET2);
 
 // inputs
-Button input_button[NUM_BUTTONS];
+MultiplexerButton input_button[NUM_BUTTONS];
 Knob input_knob[NUM_KNOBS];
 
 // outputs
@@ -334,12 +348,22 @@ void audio_interrupt_handler();
 
 // Timer callback for I2S audio
 bool audio_timer_callback(struct repeating_timer *t) {
-  // Blink LED every ~1 second to confirm timer is running
+  // Blink LED to show system status
   static uint32_t callback_counter = 0;
   callback_counter++;
+  
+#ifdef DEBUG_RETRIGGER_LED
+  // Fast blink during retrigger (10Hz), slow blink otherwise (1Hz)
+  uint32_t blink_rate = fx_retrig ? (SAMPLE_RATE / 20) : SAMPLE_RATE;
+  if (callback_counter % blink_rate == 0) {
+    gpio_put(LED_PIN, !gpio_get(LED_PIN));
+  }
+#else
+  // Normal heartbeat: blink every ~1 second to confirm timer is running
   if (callback_counter % SAMPLE_RATE == 0) {
     gpio_put(LED_PIN, !gpio_get(LED_PIN));
   }
+#endif
   
   audio_interrupt_handler();
   return true;  // Keep repeating
@@ -481,31 +505,33 @@ void pwm_interrupt_handler()
       do_mute_debounce--;
     }
 
-    // check button 1
-    if (button_on < NUM_BUTTONS) {
+    // check button 1 (only 0-7 for retrigger system)
+    if (button_on < 8) {
       if (!input_button[button_on].On()) {
         // button is off
         button_on = NUM_BUTTONS;
         button_on2 = NUM_BUTTONS;
         select_beat_freeze = 0;
         button_filter_on = false;
-        // hm
         retrig_volume_reduce = 0;
-        retrig_volume_reduce_change = 0;  // reset
+        retrig_volume_reduce_change = 0;
 
         if (btn_reset) {
           retrig_count = retrig_max;
         }
       }
     } else if (do_mute_debounce == 0) {
-      for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+      // Only check first 8 buttons (0-7) for beat selection
+      for (uint8_t i = 0; i < 8; i++) {
         if (input_button[i].On()) {
           if (button_on >= NUM_BUTTONS) {
-            select_beat_freeze = (select_beat / NUM_BUTTONS) * NUM_BUTTONS;
+            select_beat_freeze = (select_beat / 8) * 8;
+#ifdef DEBUG_RETRIGGER
+            printf("[BTN1] Button %d pressed (first)\n", i);
+#endif
           }
           button_on = i;
 
-// select new beat
 #ifdef DEBUG_BUTTONS
           printf("%d on\n", button_on);
 #endif
@@ -514,8 +540,8 @@ void pwm_interrupt_handler()
       }
     }
 
-    // check button 2
-    if (button_on2 < NUM_BUTTONS) {
+    // check button 2 (only 0-7 for retrigger system)
+    if (button_on2 < 8) {
       if (!input_button[button_on2].On()) {
         button_on2 = NUM_BUTTONS;
         button_filter_on = false;
@@ -523,18 +549,19 @@ void pwm_interrupt_handler()
     }
     if (!btn_retrig) {
       // check button 2
-      if (button_on < NUM_BUTTONS && do_mute_debounce == 0) {
-        // 1st button pressed, check for second button
-        for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+      if (button_on < 8 && do_mute_debounce == 0) {
+        // 1st button pressed, check for second button (only buttons 0-7)
+        for (uint8_t i = 0; i < 8; i++) {
           if (i == button_on) {
             continue;
           }
           if (input_button[i].On()) {
-#ifdef DEBUG_BUTTONS
-            printf("%d + %d\n", button_on, i);
+#if defined(DEBUG_BUTTONS) || defined(DEBUG_RETRIGGER)
+            printf("[RETRIG] %d + %d detected\n", button_on, i);
 #endif
             btn_retrig = true;
             button_on2 = i;
+            break;
           }
         }
       } else {
@@ -544,7 +571,7 @@ void pwm_interrupt_handler()
       }
     } else if (btn_retrig) {
       // turn off retrig if one of the buttons is released
-      if (button_on == NUM_BUTTONS || button_on2 == NUM_BUTTONS) {
+      if (button_on >= 8 || button_on2 >= 8) {
         retrig_count = retrig_max;
       }
     }
@@ -556,8 +583,9 @@ void pwm_interrupt_handler()
 
       // check for fx
       if (btn_retrig && !fx_retrig) {
-#ifdef DEBUG_PWM
-        printf("\n");
+#if defined(DEBUG_PWM) || defined(DEBUG_RETRIGGER)
+        printf("[FX_RETRIG] Starting retrigger effect (button_on=%d, button_on2=%d, retrig_sel will be set)\n", 
+               button_on, button_on2);
 #endif
         fx_retrig = true;
         uint8_t r1 = randint(0, 100);
@@ -632,10 +660,9 @@ void pwm_interrupt_handler()
     }
   }
 
-  // disable beat interrupts during fx
-  // DIAGNOSTIC: Completely disable fx_retrig system to isolate select_beat issue
-  fx_retrig = false;  // Force off every interrupt
-  btn_retrig = false;
+  // Retrigger effects are now active
+  // The fx_retrig system provides retrigger effects between two button presses
+  // with random variations in pitch, filter, and volume
   
   /*
   static uint32_t fx_retrig_start_time = 0;
@@ -771,16 +798,17 @@ void pwm_interrupt_handler()
       }
       */
 
-      // TEMPORARILY DISABLED: hold button down to play that beat
-      // This was overriding select_beat, preventing LED cycling
-      // TODO: Debug why button 1 (GPIO 5) reads as pressed when it's not
-      /*
-      if (button_on < NUM_BUTTONS) {
+      // Hold button down to play that beat
+      // Now working correctly with multiplexer (was old GPIO issue)
+      // BUT: don't override select_beat during retrigger effects
+      if (button_on < 8 && !fx_retrig) {  // Only when NOT in retrigger mode
         select_beat = (button_on + select_beat_freeze) % sample_beats;
         // record the current beat
         sequencer.Record(select_beat);
+#ifdef DEBUG_RETRIGGER
+        printf("[JUMP] select_beat set to %d (button_on=%d)\n", select_beat, button_on);
+#endif
       }
-      */
 #ifdef DEBUG_PWM
       printf("select_beat:%d for %d samples\n", select_beat,
              retrigs[retrig_sel] << flag_half_time);
@@ -942,26 +970,29 @@ void pwm_interrupt_handler()
     }
 
     // <volume>
-    // TODO: Adapt volume/distortion effects for 16-bit audio
+    // Volume effects adapted for 16-bit signed audio
     if (volume_reduce >= VOLUME_REDUCE_MAX) audio_now = 0;  // silence is 0 in 16-bit
     
-    // Simple volume reduction for now (shift right)
+    // Volume reduction using arithmetic right shift (preserves sign)
     if (volume_reduce > 0) {
       audio_now = audio_now >> (volume_reduce / 4);
     }
-    if ((volume_mod + retrig_volume_reduce + noise_gate_fade) > 0) {
-      audio_now = audio_now >> (volume_mod + retrig_volume_reduce + noise_gate_fade);
+    
+    // Retrigger and gate volume reduction (more aggressive)
+    uint8_t total_volume_reduce = volume_mod + retrig_volume_reduce + noise_gate_fade;
+    if (total_volume_reduce > 0) {
+      // For 16-bit, double the shift amount to match 8-bit behavior
+      audio_now = audio_now >> (total_volume_reduce * 2);
     }
     // </volume>
 
     // <bitcrush>
-    // if (bitcrush > 0) {
-    //   if (audio_now > 128) {
-    //     audio_now = 128 + (((audio_now - 128) >> bitcrush) << bitcrush);
-    //   } else if (audio_now < 128) {
-    //     audio_now = 128 - (((128 - audio_now) >> bitcrush) << bitcrush);
-    //   }
-    // }
+    // Bitcrush adapted for 16-bit signed audio (center is 0, not 128)
+    if (bitcrush > 0) {
+      // Reduce bit depth by zeroing out lower bits
+      int16_t mask = ~((1 << (bitcrush * 2)) - 1);  // *2 for 16-bit range
+      audio_now = audio_now & mask;
+    }
     // </bitcrush>
 
     // <filter>
@@ -1268,10 +1299,14 @@ int main(void) {
   gpio_set_dir(23, GPIO_OUT);
   gpio_put(23, 0);
 
-  // initialize buttons
+  // initialize button multiplexer
+  MultiplexerManager::Init(BTN_MUX_COM, BTN_MUX_S0, BTN_MUX_S1, BTN_MUX_S2, BTN_MUX_S3);
+  
+  // initialize all 16 buttons via multiplexer (reduced debounce for faster combo detection)
   for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
-    input_button[i].Init(i + 4, 10);  // GPIO 4 through 11 are buttons
+    input_button[i].Init(i, BTN_MUX_COM, BTN_MUX_S0, BTN_MUX_S1, BTN_MUX_S2, BTN_MUX_S3, 5);
   }
+  printf("16 buttons initialized via multiplexer (GPIO 21 COM, GPIO 14-17 select)\n");
 
   // initialize knobs
   // CRITICAL: Knobs use GPIO 26, 27, 28 for ADC. When shift register is enabled,
@@ -1539,53 +1574,77 @@ int main(void) {
     }
 
     if (clock_ms % 16 == 0) {  // 250 Hz
-      // read gpio inputs
+      // STEP 1: Read all button states first (important for multiplexer)
       for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
         if (midi_button1 != i && midi_button2 != i) {
           input_button[i].Read();
+          // Small delay between reads for multiplexer stability
+          sleep_us(10);
         }
-        // if (input_button[i].ChangedHigh(false)) {
-        //   MidiOut_on(midiout, midi_notes[(i % 8)], 127);
-        // }
-        if (input_button[1].ChangedHigh(true) ||
-            input_button[2].ChangedHigh(true) ||
-            input_button[5].ChangedHigh(true) ||
-            input_button[6].ChangedHigh(true)) {
-          if (input_button[1].On() && input_button[2].On() &&
-              input_button[5].On() && input_button[6].On()) {
-            debounce_lock_clock = 80;
-            do_lock_clock = !do_lock_clock;
+      }
+      
+      // STEP 2: Check button combinations (after all buttons are read)
+      // Combo 1: Buttons 0+1+6+7 (leftmost + rightmost) = Stop/Play (ORIGINAL PICOCORE)
+      if (input_button[0].ChangedHigh(true) ||
+          input_button[1].ChangedHigh(true) ||
+          input_button[6].ChangedHigh(true) ||
+          input_button[7].ChangedHigh(true)) {
+        if (input_button[0].On() && input_button[1].On() &&
+            input_button[6].On() && input_button[7].On()) {
+          if (do_mute) {
+            do_start_everything();
+          } else {
+            do_stop_everything();
           }
         }
-        if (input_button[0].ChangedHigh(true) ||
-            input_button[1].ChangedHigh(true) ||
-            input_button[6].ChangedHigh(true) ||
-            input_button[7].ChangedHigh(true)) {
-          if (input_button[0].On() && input_button[1].On() &&
-              input_button[6].On() && input_button[7].On()) {
-            debounce_reset_fx = 80;
-            // reset fx
-            param_set_break(0, filter_fc, distortion, probability_jump,
-                            probability_retrig, probability_gate,
-                            probability_direction, probability_tunnel,
-                            save_data);
+      }
+      
+      // Combo 2: Buttons 1+2+5+6 = Lock clock
+      if (input_button[1].ChangedHigh(true) ||
+          input_button[2].ChangedHigh(true) ||
+          input_button[5].ChangedHigh(true) ||
+          input_button[6].ChangedHigh(true)) {
+        if (input_button[1].On() && input_button[2].On() &&
+            input_button[5].On() && input_button[6].On()) {
+          debounce_lock_clock = 80;
+          do_lock_clock = !do_lock_clock;
+        }
+      }
+      
+      // Combo 3: Buttons 0+3+4+7 = Reset FX
+      if (input_button[0].ChangedHigh(true) ||
+          input_button[3].ChangedHigh(true) ||
+          input_button[4].ChangedHigh(true) ||
+          input_button[7].ChangedHigh(true)) {
+        if (input_button[0].On() && input_button[3].On() &&
+            input_button[4].On() && input_button[7].On()) {
+          debounce_reset_fx = 80;
+          // reset fx
+          param_set_break(0, filter_fc, distortion, probability_jump,
+                          probability_retrig, probability_gate,
+                          probability_direction, probability_tunnel,
+                          save_data);
+        }
+      }
+      
+      // Debug output
+      for (uint8_t i = 0; i < NUM_BUTTONS; i++) {
+#ifdef DEBUG_BUTTONS
+        // Debug first 8 buttons only to avoid spam
+        if (i < 8 && input_button[i].On()) {
+          printf("[BTN] Button %d is ON\n", i);
+        }
+#endif
+#ifdef DEBUG_BUTTONS_LED
+        // Visual debug: Blink onboard LED rapidly when any button 0-7 is pressed
+        static uint32_t led_blink_counter = 0;
+        if (i < 8 && input_button[i].On()) {
+          led_blink_counter++;
+          if (led_blink_counter % 10 == 0) {  // Fast blink at ~25 Hz when button pressed
+            gpio_put(LED_PIN, !gpio_get(LED_PIN));
           }
         }
-        if (input_button[0].ChangedHigh(true) ||
-            input_button[3].ChangedHigh(true) ||
-            input_button[4].ChangedHigh(true) ||
-            input_button[7].ChangedHigh(true)) {
-          // button combo
-          if (input_button[0].On() && input_button[3].On() &&
-              input_button[4].On() && input_button[7].On()) {
-            if (do_mute) {
-              do_start_everything();
-            } else {
-              do_stop_everything();
-            }
-            // printf("switching do mute: %d\n", do_mute);
-          }
-        }
+#endif
 #ifdef DEBUG_BUTTONS
         if (input_button[i].Changed(false)) {
           printf("[%6d] %d: %d", clock_ms, i, input_button[i].On());
@@ -1930,10 +1989,19 @@ int main(void) {
     // NOTE: Onboard LED is toggled in beat detection (audio_interrupt_handler)
     // If onboard LED blinks at ~5.5 Hz = beat detection working
     // If onboard LED stays solid = beat detection NOT firing
-    ledarray.Clear();
     
+    // Update LEDs 0-7 (step LEDs) - show current beat position
     uint8_t led_index = select_beat % 8;
-    ledarray.Set(led_index, 1000);  // Full brightness
+    for (uint8_t i = 0; i < 8; i++) {
+      ledarray.Set(i, (i == led_index) ? 1000 : 0);
+    }
+    
+    // Update LEDs 8-15 (second shift register) - reflect button states (buttons 8-15)
+    // Y1-Y4 (LEDs 8-11) correspond to buttons 8-11
+    // PLAY/STOP, SEQ_REC, SEQ_ERASE, SEQ_ON_OFF (LEDs 12-15) correspond to buttons 12-15
+    for (uint8_t i = 8; i < 16; i++) {
+      ledarray.Set(i, input_button[i].On() ? 1000 : 0);
+    }
     
     ledarray.Update();
 #endif

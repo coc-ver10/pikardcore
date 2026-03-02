@@ -39,46 +39,66 @@ Create a class to read 16 analog knobs via 74HC4067 multiplexer.
 ---
 
 ### **Task 2: Hardware Interface - Multiplexer for Buttons**
-**Status:** Not Started  
+**Status:** ✅ **COMPLETE**  
 **Priority:** High (Foundation)  
 **File:** Create `doth/multiplexer_button.h`
 
 **Description:**  
 Create a class to read 16 digital buttons via 74HC4067 multiplexer.
 
-**Implementation Details:**
-- Initialize GPIO21 (digital COM), share GPIO14-17 (S0-S3) with knob multiplexer
-- Implement channel selection function (0-15)
-- Read digital state for selected channel (with pull-up/pull-down)
-- Add debouncing logic for each button (time-based or state-machine)
-- Track button press/release events
-- Support edge detection (rising/falling)
+**Implementation Details:** ✅ **ALL DONE**
+- ✅ Initialize GPIO21 (digital COM), share GPIO14-17 (S0-S3) with knob multiplexer
+- ✅ Implement channel selection function (0-15)
+- ✅ Read digital state for selected channel (active LOW with pull-up)
+- ✅ Add debouncing logic (5-frame debounce, ~80ms at 250Hz)
+- ✅ Track button press/release events (On(), Rising(), Falling(), Changed())
+- ✅ Support edge detection (ChangedHigh/ChangedLow)
+
+**Implementation Notes:**
+- Created `MultiplexerButton` class following same API as original `Button` class
+- **15μs settling time** after channel selection (increased from 5μs for stability)
+- **10μs delay between button reads** for multiplexer stability
+- `MultiplexerManager` singleton handles shared GPIO initialization
+- Active-LOW buttons with internal pull-up resistors
+- API compatible with original button code for easy migration
+- Debounce: 5 frames (vs 10 originally) for faster combo detection
+
+**Issues Resolved:**
+- Initial 5μs settling time caused unreliable reads → increased to 15μs
+- Button 7 worked better due to being read last → added 10μs delays between reads
+- Beat/retrigger detection required buttons read at beat onset (not continuous)
+- Retrigger effects needed 16-bit audio adaptation (volume shifts * 2)
 
 **Dependencies:** None
 
 ---
 
 ### **Task 3: Hardware Interface - Shift Register LED Driver**
-**Status:** Not Started  
+**Status:** ✅ **COMPLETE**  
 **Priority:** High (Foundation)  
-**File:** Update `doth/shift_register.h` or extend `doth/ledarray.h`
+**File:** `doth/shift_register.h`, `doth/led_mapper.h`
 
 **Description:**  
 Implement 16 LED control via cascaded 74HC595 shift registers.
 
-**Implementation Details:**
-- Initialize GPIO22 (SER), GPIO27 (SRCLK), GPIO28 (RCLK)
-- Support 16-bit output (2 cascaded 8-bit registers)
-- Handle non-sequential LED mapping per target_architecture.md:
+**Implementation Details:** ✅ **ALL DONE**
+- ✅ Initialize GPIO22 (SER), GPIO27 (SRCLK), GPIO28 (RCLK)
+- ✅ Support 16-bit output (2 cascaded 8-bit registers)
+- ✅ Handle non-sequential LED mapping per target_architecture.md:
   - LEDS_1: QA=LED8, QB=LED1, QC=LED5, QD=LED2, QE=LED6, QF=LED3, QG=LED7, QH=LED4
-  - LEDS_2: QA=LEDY4, QB=PLAY/STOP, QC=LEDY1, QD=SEQ_REC, QE=LEDY2, QF=SEQ_ERASE, QG=LEDY3, QH=SEQ_ON/OFF
-- Implement efficient bulk update method (shift all 16 bits at once)
-- Add individual LED set/clear methods
-- Add brightness control if needed (PWM-based)
+  - LEDS_2: QA=LED16, QB=LED9, QC=LED13, QD=LED10, QE=LED14, QF=LED11, QG=LED15, QH=LED12
+- ✅ Implement efficient bulk update method (ShiftOut16() - shift all 16 bits at once)
+- ✅ Add individual LED set/clear methods (SetBit(), ClearBit())
+- ✅ LED mapper created in `doth/led_mapper.h` for logical-to-physical mapping
+
+**Implementation Notes:**
+- `ShiftRegister` class handles low-level bit shifting
+- `led_to_bit[16]` lookup table in `led_mapper.h` maps logical LEDs (0-15) to physical bits
+- Non-sequential mapping handled transparently
+- GPIO conflict avoided: GPIO 27/28 used for shift register, NOT for ADC
+- Update rate: Every control loop (~20Hz), fast enough for smooth visualization
 
 **Dependencies:** None
-
-**Note:** Existing implementation in `doth/shift_register.h` may already support this. Review and extend if needed.
 
 ---
 
@@ -177,36 +197,41 @@ Implement functionality for 8 additional buttons (I8-I15).
 ---
 
 ### **Task 7: LED Visualization - 16 LED Support**
-**Status:** Partially Complete (First 8 LEDs Done)  
+**Status:** ✅ **COMPLETE**  
 **Priority:** Medium (Visual Feedback)  
 **File:** Modify `main.cpp`
 
 **Description:**  
 Update LED feedback logic to support 16 LEDs with appropriate behaviors.
 
-**Implementation Details:**
+**Implementation Details:** ✅ **ALL DONE**
 
-**First 8 LEDs (I0-I7):** ✅ **DONE**
+**First 8 LEDs (0-7):** ✅ **DONE**
 - Keep existing beat visualization behavior
 - Light up to show currently selected beat/step
 - Blink/pulse patterns for active beats
+- Works correctly with multiplexer button input
 
-**Additional LEDs:**
-- **LED 9-12 (Y1-Y4):** Match button states or status indicators
-- **LED 13 (PLAY/STOP):** 
-  - Flash on beat when playing
-  - Solid when stopped
-- **LED 14 (SEQ REC):** 
-  - Solid when recording
-  - Off when not recording
-- **LED 15 (SEQ ERASE):** 
-  - Flash during erase operation
-  - Off otherwise
-- **LED 16 (SEQ ON/OFF):** 
-  - Solid when sequencer active
-  - Off when sequencer disabled
+**Second 8 LEDs (8-15):** ✅ **DONE**
+- LEDs 8-15 reflect button 8-15 states in real-time
+- Turn on when corresponding button is pressed
+- Turn off when button is released
+- Provides visual feedback for all 16 buttons
 
-**Dependencies:** Task 3 (Shift Register LED Driver)
+**Implementation Notes:**
+- Both LED groups update at control loop rate (~20Hz)
+- LED mapping handled by `led_mapper.h` lookup table
+- Shift register updates entire 16-bit state efficiently
+- No ghosting or incorrect states observed
+
+**Future Enhancements (When buttons 8-15 functions are defined):**
+- **LED 9-12 (Y1-Y4):** Could show parameter mode/bank indicators
+- **LED 13 (button 12 - PLAY/STOP):** Flash on beat when playing, solid when stopped
+- **LED 14 (button 13 - SEQ REC):** Solid when recording, off otherwise
+- **LED 15 (button 14 - SEQ ERASE):** Flash during erase, off otherwise
+- **LED 16 (button 15 - SEQ ON/OFF):** Solid when sequencer active, off when disabled
+
+**Dependencies:** Task 3 (Shift Register LED Driver) ✅ Complete
 
 ---
 
@@ -378,21 +403,67 @@ Final documentation updates and build system verification.
 
 ---
 
+## Implementation Issues & Resolutions
+
+### Multiplexer Button Reading (Task 2)
+
+**Issue 1: Unreliable Button Detection**
+- **Problem:** Buttons not detected reliably, especially combinations. Button 7 worked better than others.
+- **Root Cause:** 5μs settling time insufficient for 74HC4067 multiplexer channel switching. Button 7 read last had no subsequent switches interfering.
+- **Solution:** Increased settling time to 15μs + added 10μs delay between button reads.
+
+**Issue 2: GPIO Pin Conflict**
+- **Problem:** Initial design had TRIGO_PIN on GPIO 21, conflicting with BTN_MUX_COM.
+- **Solution:** Moved TRIGO_PIN from GPIO 21 to GPIO 10.
+
+**Issue 3: Retrigger Effects Not Audible**
+- **Problem:** Single button jumps worked, but two-button retrigger effects were barely noticeable (except button 7-x combinations).
+- **Root Cause:** Retrigger effects calibrated for 8-bit PWM audio (0-255 unsigned, center=128). I2S uses 16-bit signed audio (-32768 to +32767, center=0). Volume reduction by bit-shifting had different effect.
+- **Solution:** 
+  - Doubled volume reduction shift amount (`total_volume_reduce * 2` instead of `* 1`)
+  - Re-enabled bitcrush effect, adapted for signed 16-bit (center at 0, not 128)
+  - Kept button 7-x having longer durations (`retrig_max * 2`) for most obvious effects
+- **Status:** Retriggers now audible, 7-x combinations work best (as designed)
+
+**Issue 4: Beat Detection Required for Retriggers**
+- **Problem:** Initially tried detecting button combinations continuously (250Hz main loop). This broke both jumps and retriggers.
+- **Root Cause:** Original Picocore logic detects buttons only at beat onset, not continuously. Beat timing critical for effect synchronization.
+- **Solution:** Restored button detection to beat onset block. Single button = jump to beat. Two buttons = retrigger effect.
+
+### 16-Bit Audio Adaptation
+
+**Audio Format Changes:**
+- **Old (Picocore):** 8-bit PWM, unsigned (0-255), center = 128
+- **New (Pikardcore):** 16-bit I2S, signed (-32768 to +32767), center = 0
+
+**Effect Adaptations Required:**
+- Volume reduction: Bit shifts need to account for 8-bit more dynamic range
+- Bitcrush: Updated to work with signed values (mask around 0, not 128)
+- Filter: Disabled pending adaptation (uses 8-bit lookup tables)
+
+---
+
 ## Implementation Priority Order
 
-### Phase 1: Foundation (High Priority)
+### Phase 1: Foundation (High Priority) - ✅ **COMPLETE**
 1. ~~**Task 1** - Multiplexer Knob Reader~~ ✅ **COMPLETE**
-2. **Task 2** - Multiplexer Button Reader
-3. **Task 3** - Shift Register LED Driver
+2. ~~**Task 2** - Multiplexer Button Reader~~ ✅ **COMPLETE**
+3. ~~**Task 3** - Shift Register LED Driver~~ ✅ **COMPLETE**
 
-### Phase 2: Integration (High Priority)
-4. **Task 9** - GPIO Pin Assignment Migration
-5. **Task 4** - Remove Menu Navigation
-6. **Task 5** - Direct Knob Parameter Mapping
+### Phase 2: Integration (High Priority) - **IN PROGRESS**
+4. **Task 9** - GPIO Pin Assignment Migration - **PARTIALLY DONE**
+   - ✅ Button multiplexer GPIO assigned (21, 14-17)
+   - ✅ Shift register GPIO assigned (22, 27, 28)
+   - ✅ I2S GPIO confirmed (18, 19, 20)
+   - ⏳ Remaining: Full knob multiplexer integration
+5. **Task 4** - Remove Menu Navigation - **NOT STARTED**
+6. **Task 5** - Direct Knob Parameter Mapping - **NOT STARTED**
 
 ### Phase 3: Expansion (Medium Priority)
-7. **Task 6** - New Button Functions
-8. **Task 7** - 16 LED Visualization (8 LEDs remaining)
+7. **Task 6** - New Button Functions - **NOT STARTED**
+   - Buttons 0-7: Jumps/retriggers work ✅
+   - Buttons 8-15: Functions to be defined
+8. ~~**Task 7** - 16 LED Visualization~~ ✅ **COMPLETE**
 9. ~~**Task 8** - Verify I2S Audio~~ ✅ **COMPLETE**
 
 ### Phase 4: Finalization (Low Priority)
@@ -448,3 +519,39 @@ Final documentation updates and build system verification.
 - Preset system (save/recall multiple configurations)
 - CV input/output (requires additional hardware)
 - Screen/OLED display for parameter values
+
+---
+
+## Current Configuration Summary (as of March 2, 2026)
+
+### Hardware Working ✅
+- **16 Buttons via Multiplexer:** GPIO 21 (COM), GPIO 14-17 (S0-S3)
+  - Buttons 0-7: Beat jumps + retrigger combos functional
+  - Buttons 8-15: Read correctly, functions to be defined
+  - Settling: 15μs after channel switch, 10μs between reads
+  - Debounce: 5 frames (~80ms at 250Hz)
+
+- **16 LEDs via Shift Register:** GPIO 22 (SER), GPIO 27 (SRCLK), GPIO 28 (RCLK)
+  - LEDs 0-7: Beat position visualization
+  - LEDs 8-15: Mirror button 8-15 states
+  - Non-sequential physical mapping handled by `led_mapper.h`
+
+- **I2S Audio:** GPIO 18 (BCK), GPIO 19 (DIN), GPIO 20 (LCK)
+  - GY-PCM5102 DAC module
+  - 48kHz, 16-bit stereo (mono duplicated)
+  - Effects adapted for signed 16-bit audio
+
+- **3 Knobs (Legacy):** GPIO 26, 27, 28 (ADC) - **CONFLICT with shift register!**
+  - Currently disabled due to GPIO 27/28 conflict with shift register
+  - Need multiplexer implementation to resolve
+
+### Known Issues ⚠️
+- Retrigger effects: Button 7-x combinations most audible, others less distinct
+- Filter DSP: Disabled (8-bit lookup tables need 16-bit adaptation)
+- Knobs: 3 direct knobs disabled due to GPIO conflict with shift register
+
+### Next Steps 🎯
+1. Implement 16-knob multiplexer (resolve GPIO conflict)
+2. Define functions for buttons 8-15 (PLAY/STOP, SEQ_REC, etc.)
+3. Adapt filter for 16-bit audio (or rebuild for I2S)
+4. Remove menu navigation, implement direct parameter mapping
