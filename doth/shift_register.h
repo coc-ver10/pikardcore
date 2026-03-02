@@ -22,14 +22,18 @@ class ShiftRegister {
     for (int8_t i = 15; i >= 0; i--) {
       // Set data bit on serial line
       gpio_put(gpio_ser, (data >> i) & 0x01);
+      sleep_us(1);  // Small delay for signal stability
       
       // Pulse shift clock to move data into register
       gpio_put(gpio_srclk, 1);
+      sleep_us(1);  // Hold clock high
       gpio_put(gpio_srclk, 0);
+      sleep_us(1);  // Hold clock low
     }
     
     // Pulse latch clock to transfer shift register to output latches
     gpio_put(gpio_rclk, 1);
+    sleep_us(1);
     gpio_put(gpio_rclk, 0);
   }
 

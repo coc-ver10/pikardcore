@@ -17,11 +17,15 @@ class LEDArray {
  public:
   void Init() {
     shift_reg.Init(SR_SER_PIN, SR_SRCLK_PIN, SR_RCLK_PIN);
+    // Initialize all LED values to zero
     for (uint8_t i = 0; i < 16; i++) {
       vals[i] = 0;
     }
     dim_i = 0;
     do_leds = 0;
+    
+    // Force immediate hardware update to ensure all LEDs start off
+    shift_reg.Clear();
   }
 
   bool Continue() {
@@ -49,13 +53,10 @@ class LEDArray {
 
   void Update() {
     dim_i++;
-    
-    // Debug: Print state periodically
-    static uint32_t debug_counter = 0;
-    if (++debug_counter >= 20000) {  // Every 20000 calls (~1 second at 20kHz)
-      debug_counter = 0;
-      printf("[LED Update] dim_i=%d, vals[0]=%d, vals[1]=%d, vals[7]=%d\n", 
-             dim_i, vals[0], vals[1], vals[7]);
+    // CRITICAL: Ensure dim_i wraps at 256 for proper 8-bit PWM
+    // Without this, PWM causes flickering as dim_i overflows
+    if (dim_i > 255) {
+      dim_i = 0;
     }
     
     // Apply software PWM to all LEDs

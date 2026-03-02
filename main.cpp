@@ -486,6 +486,9 @@ void pwm_interrupt_handler()
     beat_onset = true;
     beat_led = 1 - beat_led;
     noise_gate_val = 0;
+    
+    // Check if this is a reset BEFORE incrementing select_beat
+    bool was_reset = btn_reset;
     if (btn_reset) {
       beat_led = 1;
       beat_num_total = 0;
@@ -494,9 +497,12 @@ void pwm_interrupt_handler()
     
     // CRITICAL: Advance select_beat IMMEDIATELY when beat is detected
     // Don't wait for the audio_clk condition later
-    select_beat++;
-    if (select_beat >= sample_beats) {
-      select_beat = 0;  // Wrap around
+    // BUT: Skip increment on reset to start from beat 0
+    if (!was_reset) {
+      select_beat++;
+      if (select_beat >= sample_beats) {
+        select_beat = 0;  // Wrap around
+      }
     }
     
     output_trigger.Trigger();
@@ -1056,6 +1062,12 @@ void do_start_everything() {
   button_filter_on = false;
   fx_retrig = false;
   btn_retrig = false;
+  // RESET PLAYBACK: Reset phases and beat position for clean restart
+  phase_sample[0] = 0;
+  phase_sample[1] = 0;
+  phase_retrig = 0;
+  select_beat = 0;
+  beat_counter = 0;
   do_mute = false;
 }
 
@@ -1193,10 +1205,15 @@ int main(void) {
   
   stdio_init_all();
 
-  // sleep needed to make sure it can start on battery
-  // not sure why
-  sleep_ms(100);
+  // Wait for USB CDC connection (longer delay for debug console)
+  // This ensures printf works when connected via screen/minicom
+  sleep_ms(2000);
   
+  // Print multiple times to ensure USB buffer catches at least one
+  for (int i = 0; i < 5; i++) {
+    printf("\n\n=== Pikardcore I2S Firmware STARTING ===\n");
+    sleep_ms(100);
+  }
   printf("\n\n=== Pikardcore I2S Firmware ===\n");
   printf("Sample Rate: %d Hz\n", SAMPLE_RATE);
   printf("System Clock: %d kHz (%d MHz)\n", SYSTEM_CLOCK_KHZ, SYSTEM_CLOCK_KHZ/1000);
@@ -1229,7 +1246,15 @@ int main(void) {
   // Setup LED for heartbeat
   gpio_init(LED_PIN);
   gpio_set_dir(LED_PIN, GPIO_OUT);
-  // Removed onboard LED blink at startup
+  
+  // Blink onboard LED 3 times at startup to indicate boot
+  for (int i = 0; i < 3; i++) {
+    gpio_put(LED_PIN, 1);
+    sleep_ms(100);
+    gpio_put(LED_PIN, 0);
+    sleep_ms(100);
+  }
+  printf("Onboard LED should have blinked 3 times\n");
 
 #if I2S_AUDIO_ENABLED == 1
   // Initialize I2S audio output via PIO
@@ -1596,6 +1621,15 @@ int main(void) {
           } else {
             do_stop_everything();
           }
+        }
+      }
+      
+      // Button 12: Dedicated PLAY/STOP button (I12)
+      if (input_button[12].ChangedHigh(true)) {
+        if (do_mute) {
+          do_start_everything();
+        } else {
+          do_stop_everything();
         }
       }
       
@@ -1984,11 +2018,9 @@ int main(void) {
     output_trigger.Update();
 
 #if SHIFT_REGISTER_ENABLED == 1
-    // Display current beat position on shift register LEDs
-    // select_beat advances 0-31 for the amen break, we show (select_beat % 8)
-    // NOTE: Onboard LED is toggled in beat detection (audio_interrupt_handler)
-    // If onboard LED blinks at ~5.5 Hz = beat detection working
-    // If onboard LED stays solid = beat detection NOT firing
+    // Display current beat position on shift register LEDs (16 LEDs via cascaded 74HC595)
+    // LEDs 0-7: Step/beat indicators
+    // LEDs 8-15: Control indicators (Y1-Y4, PLAY/STOP, SEQ controls)
     
     // Update LEDs 0-7 (step LEDs) - show current beat position
     uint8_t led_index = select_beat % 8;
@@ -1996,11 +2028,18 @@ int main(void) {
       ledarray.Set(i, (i == led_index) ? 1000 : 0);
     }
     
-    // Update LEDs 8-15 (second shift register) - reflect button states (buttons 8-15)
-    // Y1-Y4 (LEDs 8-11) correspond to buttons 8-11
-    // PLAY/STOP, SEQ_REC, SEQ_ERASE, SEQ_ON_OFF (LEDs 12-15) correspond to buttons 12-15
-    for (uint8_t i = 8; i < 16; i++) {
-      ledarray.Set(i, input_button[i].On() ? 1000 : 0);
+    // Update LEDs 8-15 (control LEDs)
+    // LEDs 8-11 (Y1-Y4): Not yet defined - keep off
+    for (uint8_t i = 8; i < 12; i++) {
+      ledarray.Set(i, 0);
+    }
+    
+    // LED 12 (PLAY/STOP): ON when playing, OFF when stopped
+    ledarray.Set(12, !do_mute ? 1000 : 0);
+    
+    // LEDs 13-15 (SEQ_REC, SEQ_ERASE, SEQ_ON_OFF): Not yet implemented - keep off
+    for (uint8_t i = 13; i < 16; i++) {
+      ledarray.Set(i, 0);
     }
     
     ledarray.Update();

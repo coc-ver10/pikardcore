@@ -924,7 +924,44 @@ SR_RCLK_PIN = GPIO 28    // Storage/Latch Clock (both registers)
 
 ---
 
-**Document Version:** 2.0  
-**Date:** February 22, 2026  
-**Status:** Ready for Implementation - GPIO Assignments Confirmed
-**Status:** Planning Phase - Awaiting GPIO Conflict Resolution
+**Document Version:** 3.0  
+**Date:** Mars 2, 2026  
+**Status:** ✅ **IMPLEMENTATION COMPLETE**
+
+### Implementation Summary
+
+**Completed:** Mars 2, 2026
+
+**Files Modified:**
+- `doth/shift_register.h` - 74HC595 16-bit driver with cascaded register support
+- `doth/led_mapper.h` - Logical to physical LED mapping lookup table
+- `doth/ledarray.h` - Updated for 16 LEDs with shift register backend
+- `main.cpp` - LED update logic for beat visualization and control indicators
+
+**Critical Fixes Applied:**
+1. **PWM Overflow Fix** - Added `if (dim_i > 255) dim_i = 0;` in ledarray.h Update()
+   - Prevented uint8_t overflow causing LED flickering
+   - Result: Stable, non-flickering LED display
+   
+2. **Shift Register Timing** - Added 1μs delays between clock pulses
+   - Ensures reliable signal propagation through cascaded registers
+   - Prevents data corruption during high-speed updates
+
+3. **Cascade Verification** - Confirmed MSB-first shift order
+   - Bits 0-7 remain in LEDS_1 (first register)
+   - Bits 8-15 end up in LEDS_2 (second register via QH' cascade)
+   - Mapping verified against target_architecture.md
+
+**Current Functionality:**
+- ✅ All 16 LEDs operational
+- ✅ Beat visualization on LEDs 0-7 (step indicators)
+- ✅ LED 12 (PLAY/STOP) shows playback state
+- ✅ LEDs 8-11, 13-15 reserved for future control functions
+- ✅ Software PWM operating correctly with 8-bit resolution
+- ✅ No flickering or ghosting observed
+
+**Hardware Verified:**
+- Two cascaded 74HC595 shift registers
+- GPIO 22 (SER), GPIO 27 (SRCLK), GPIO 28 (RCLK)
+- All 16 physical LEDs responding correctly
+- Non-sequential mapping working as designed

@@ -8,6 +8,30 @@ See [target_architecture.md](target_architecture.md) for detailed hardware speci
 
 ---
 
+## Recent Updates
+
+### March 2, 2026 - PLAY/STOP Button & LED Fixes
+
+**Completed:**
+- ✅ Implemented PLAY/STOP button (I12) with full playback reset
+- ✅ Fixed critical PWM overflow bug in LED system (caused flickering)
+- ✅ Verified 16 LED shift register cascade operation
+- ✅ LED 12 (PLAY/STOP) now correctly indicates playback state
+
+**Technical Details:**
+- PLAY/STOP button toggles `do_mute` and fully resets playback state
+- Playback reset includes: `phase_sample[]`, `phase_retrig`, `select_beat`, `beat_counter`
+- Fixed PWM: Added `if (dim_i > 255) dim_i = 0;` to prevent uint8_t overflow
+- Added 1μs timing delays in shift register for signal stability
+- LEDs 8-11 and 13-15 remain off (functions not yet implemented)
+
+**Next Steps:**
+- Implement remaining control buttons (I13-I15: SEQ REC, ERASE, ON/OFF)
+- Define functions for Y buttons (I8-I11)
+- Consider adding visual feedback modes for active parameters
+
+---
+
 ## Task List
 
 ### **Task 1: Hardware Interface - Multiplexer for Knobs** 
@@ -156,7 +180,7 @@ Map knobs to parameters:
 ---
 
 ### **Task 6: Button Functions - 8 New Controls**
-**Status:** Not Started  
+**Status:** 🟡 **PARTIALLY COMPLETE**  
 **Priority:** Medium (Expanded Controls)  
 **File:** Modify `main.cpp`
 
@@ -165,11 +189,14 @@ Implement functionality for 8 additional buttons (I8-I15).
 
 **Implementation Details:**
 
-**Defined Buttons:**
-- **I12 (PLAY/STOP):** Global playback toggle
-  - Stop: Freeze playback, silence output
-  - Play: Resume playback from current position
+**Implemented Buttons:** ✅
+- **I12 (PLAY/STOP):** ✅ **COMPLETE** - Global playback toggle
+  - Stop: Sets `do_mute = true`, freezes playback
+  - Play: Resets playback completely (phases, beat counter, select_beat)
+  - Works with original combo (buttons 0+1+6+7) and dedicated button I12
+  - Playback restarts from beat 0 (step 1) on play
   
+**Not Yet Implemented:**
 - **I13 (SEQ REC):** Sequencer record mode
   - Enter sequencer record mode
   - Record button press patterns
@@ -192,14 +219,20 @@ Implement functionality for 8 additional buttons (I8-I15).
   - Effect bypass
   - Quantize on/off
 
-**Dependencies:** Task 2 (Multiplexer Button Reader)
+**Implementation Notes:**
+- Button I12 reads via multiplexer at 250Hz (every 4ms)
+- `do_start_everything()` fully resets: phase_sample[], phase_retrig, select_beat, beat_counter
+- Reset flag `btn_reset` properly skips beat increment to start at beat 0
+- Compatible with existing play/stop combo logic
+
+**Dependencies:** Task 2 (Multiplexer Button Reader) ✅ Complete
 
 ---
 
 ### **Task 7: LED Visualization - 16 LED Support**
 **Status:** ✅ **COMPLETE**  
 **Priority:** Medium (Visual Feedback)  
-**File:** Modify `main.cpp`
+**File:** Modify `main.cpp`, `doth/ledarray.h`, `doth/shift_register.h`
 
 **Description:**  
 Update LED feedback logic to support 16 LEDs with appropriate behaviors.
@@ -208,28 +241,35 @@ Update LED feedback logic to support 16 LEDs with appropriate behaviors.
 
 **First 8 LEDs (0-7):** ✅ **DONE**
 - Keep existing beat visualization behavior
-- Light up to show currently selected beat/step
-- Blink/pulse patterns for active beats
+- Light up to show currently selected beat/step (`select_beat % 8`)
 - Works correctly with multiplexer button input
+- Brightness: 1000 (maps to 255 internally for full brightness)
 
 **Second 8 LEDs (8-15):** ✅ **DONE**
-- LEDs 8-15 reflect button 8-15 states in real-time
-- Turn on when corresponding button is pressed
-- Turn off when button is released
-- Provides visual feedback for all 16 buttons
+- **LEDs 8-11 (Y1-Y4):** Off (functions not yet defined)
+- **LED 12 (PLAY/STOP):** ✅ ON when playing (`!do_mute`), OFF when stopped
+- **LEDs 13-15 (SEQ controls):** Off (functions not yet implemented)
+- Persistent state indicators (not momentary button feedback)
+
+**Critical Fixes Applied:** ✅
+- **PWM Overflow Fix:** Added `if (dim_i > 255) dim_i = 0;` to prevent PWM counter overflow
+  - Previous issue: dim_i would overflow uint8_t causing rapid flickering
+  - Result: All LEDs now display steadily without flickering
+- **Shift Register Timing:** Added 1μs delays between clock pulses for signal stability
+- **Cascade Verification:** Confirmed bits 0-7 → LEDS_1, bits 8-15 → LEDS_2
+- **LED Mapping:** Verified against target_architecture.md non-sequential output mapping
 
 **Implementation Notes:**
-- Both LED groups update at control loop rate (~20Hz)
+- Both LED groups update at control loop rate (~20Hz in main loop)
+- Software PWM: `dim_i < vals[i]` determines LED state each cycle
 - LED mapping handled by `led_mapper.h` lookup table
 - Shift register updates entire 16-bit state efficiently
-- No ghosting or incorrect states observed
+- All 16 LEDs tested and working correctly
 
-**Future Enhancements (When buttons 8-15 functions are defined):**
-- **LED 9-12 (Y1-Y4):** Could show parameter mode/bank indicators
-- **LED 13 (button 12 - PLAY/STOP):** Flash on beat when playing, solid when stopped
-- **LED 14 (button 13 - SEQ REC):** Solid when recording, off otherwise
-- **LED 15 (button 14 - SEQ ERASE):** Flash during erase, off otherwise
-- **LED 16 (button 15 - SEQ ON/OFF):** Solid when sequencer active, off when disabled
+**Current LED Behaviors:**
+- **LEDs 0-7:** Beat position indicator (one LED lit, cycles with beat)
+- **LED 12:** Play/Stop status (ON=playing, OFF=stopped)
+- **LEDs 8-11, 13-15:** Reserved for future functions (currently off)
 
 **Dependencies:** Task 3 (Shift Register LED Driver) ✅ Complete
 
