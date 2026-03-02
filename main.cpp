@@ -2025,8 +2025,20 @@ int main(void) {
         if (knob_mux.Changed(KNOB_I11_TEMPO)) {
           uint16_t knob_value = knob_mux.Value(KNOB_I11_TEMPO);
           
-          // Map ADC value (0-4095) to BPM range (50-360)
-          uint16_t bpm_new = (knob_value * 310 / 4095) + 50;
+          // Asymmetric mapping around sample's BPM
+          // Center (2048) = BPM_SAMPLED, Left (0) = 50 BPM, Right (4095) = 360 BPM
+          uint16_t bpm_new;
+          
+          if (knob_value < 2048) {
+            // Left half: interpolate from 50 BPM to BPM_SAMPLED
+            bpm_new = 50 + ((BPM_SAMPLED - 50) * knob_value) / 2048;
+          } else if (knob_value > 2048) {
+            // Right half: interpolate from BPM_SAMPLED to 360 BPM
+            bpm_new = BPM_SAMPLED + ((360 - BPM_SAMPLED) * (knob_value - 2048)) / (4095 - 2048);
+          } else {
+            // Exact center: sample's original BPM
+            bpm_new = BPM_SAMPLED;
+          }
           
           // Clamp to valid range
           if (bpm_new > 360) bpm_new = 360;
@@ -2046,7 +2058,7 @@ int main(void) {
             ledarray_binary = bpm_new - 50;  // Display 0-310 range
             
 #ifdef DEBUG_KNOB
-            printf("I11 (TEMPO): %d BPM (knob=%d)\n", bpm_new, knob_value);
+            printf("I11 (TEMPO): %d BPM (knob=%d, sample_bpm=%d)\n", bpm_new, knob_value, BPM_SAMPLED);
 #endif
           }
         }

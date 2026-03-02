@@ -34,7 +34,7 @@ The objective of the 16 knobs is to provide **direct access to all controls** wi
 
 | Knob # | Function | Description | Status |
 |--------|----------|-------------|--------|
-| I11 | TEMPO | BPM control (50-360 BPM) | ✅ **DONE** |
+| I11 | TEMPO | BPM control (50-360 BPM, center = sample BPM) | ✅ **DONE** |
 | I8 | GATE | Noise gate threshold (auto fade-out after silence) | To implement |
 | I3 | JUMP PROB | Jump probability (random beat jumping) | To implement |
 | I1 | TUNNEL PROB | Tunnel probability (random sample switching) | To implement |
@@ -175,11 +175,14 @@ LEDs use **cascaded 74HC595** shift registers:
   - 2049-4095: Wave-folding distortion (×7 gain + progressive fold)
   - Adapted for 16-bit signed audio (int16_t)
   - Direct ADC reading (no inversion needed for multiplexer)
-- ✅ **I11 (TEMPO)**: BPM control mapped from ADC (0-4095) to 50-360 BPM
-  - Linear mapping: bpm = (value * 310 / 4095) + 50
-  - Updates beat_thresh for audio timing
+- ✅ **I11 (TEMPO)**: BPM control with asymmetric mapping centered on sample's BPM
+  - Left (0): 50 BPM (minimum)
+  - Center (2048): BPM_SAMPLED (e.g., 165 BPM for current sample)
+  - Right (4095): 360 BPM (maximum)
+  - Formula: Left half: `50 + (BPM_SAMPLED-50) * value/2048`
+  - Formula: Right half: `BPM_SAMPLED + (360-BPM_SAMPLED) * (value-2048)/2047`
+  - Adapts automatically to each sample's native BPM
   - Saves to flash memory (SAVE_BPM)
-  - LED binary display shows BPM-50 (0-310 range)
 
 **To Implement** (14 channels remaining):
 - I0-I9: Core effects (probabilities, gate, filter, sample, break, stretch, etc.)
@@ -219,7 +222,7 @@ LEDs use **cascaded 74HC595** shift registers:
 | I8 | GATE | 0-4*BEAT | Seuil du noise gate (auto fade-out) | To implement |
 | I9 | GATE PROB | 0-254 | Probabilité de silence (gate probability) | To implement |
 | I10 | VOLUME / FOLD | 0-4095 | 0-2047: volume↓, 2048: normal, 2049-4095: distortion | ✅ **DONE** |
-| I11 | TEMPO | 50-360 BPM | Tempo du séquenceur (BPM) | ✅ **DONE** |
+| I11 | TEMPO | 50-360 BPM | Tempo asymétrique centré sur BPM du sample | ✅ **DONE** |
 | I12 | X4 | - | À définir (réservé pour extension) | Reserved |
 | I13 | X3 | - | À définir (réservé pour extension) | Reserved |
 | I14 | X2 | - | À définir (réservé pour extension) | Reserved |
@@ -229,7 +232,10 @@ LEDs use **cascaded 74HC595** shift registers:
 - **I10 (VOLUME/FOLD)** ✅ : Transition progressive continue sur toute la plage ADC (0-2048-4095)
   - Point central à 2048 = volume normal (pas de zone morte)
   - Wave-folding distortion avec gain ×7 max pour audio 16-bit
-- **I11 (TEMPO)** ✅ : Mapping linéaire ADC→BPM: `bpm = (value * 310 / 4095) + 50`
+- **I11 (TEMPO)** ✅ : Mapping asymétrique centré sur le BPM du sample (adaptatif)
+  - Centre du potard = BPM natif du sample (défini par BPM_SAMPLED dans audio2h.h)
+  - Gauche = 50 BPM (min), Droite = 360 BPM (max)
+  - S'adapte automatiquement à chaque sample chargé
 - Tous les autres canaux : en attente d'implémentation progressive
 - Les probabilités utilisent une valeur 0-254 (0 = jamais, 254 = presque toujours)
 - Le filtre utilise 46 positions discrètes (fréquences MIDI notes calculées par biquad.py)
