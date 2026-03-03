@@ -154,6 +154,7 @@ I2SAudio i2s_audio;
 
 // audio tracking
 int16_t audio_now = 0;
+int16_t audio_prev = 0;  // for stretch smoothing filter
 uint8_t audio_clk = 0;
 uint8_t audio_clk_thresh = 48;
 bool do_mute = false;
@@ -187,7 +188,9 @@ uint8_t filter_fc = LPF_MAX + 10;
 uint8_t hpf_fc = 0;
 uint8_t filter_q = 0;
 uint8_t bitcrush = 0;
-uint8_t stretch_change = 0;
+int8_t stretch_change = 0;  // Current stretch value (0-20)
+int8_t stretch_change_target = 0;  // Target value from knob
+uint16_t stretch_smooth_counter = 0;  // Counter to slow down transitions
 bool do_lock_clock = false;
 
 // beat tracking (beat = eighth-note)
@@ -708,6 +711,17 @@ void pwm_interrupt_handler()
   }
   */
 
+  // Smoothly interpolate stretch_change towards target
+  stretch_smooth_counter++;
+  if (stretch_smooth_counter >= 100) {  // Fast transition: every 100 samples (~2ms)
+    stretch_smooth_counter = 0;
+    if (stretch_change < stretch_change_target) {
+      stretch_change++;
+    } else if (stretch_change > stretch_change_target) {
+      stretch_change--;
+    }
+  }
+
   // clocking when to change samples
   audio_clk++;
   if (audio_clk == (audio_clk_thresh + retrig_pitch_change + stretch_change) ||
@@ -1054,6 +1068,15 @@ void pwm_interrupt_handler()
     // <dither>
     // audio_now = ditherer.Update(audio_now);
     // </dither>
+
+    // Always apply light smoothing to avoid pitch transition clicks
+    // Smoothing increases progressively with stretch_change
+    // Alpha: 0-10 for smooth pitch transitions (0 = no filter, 10 = strong filter)
+    uint8_t alpha = (stretch_change > 10) ? 10 : stretch_change;
+    if (alpha > 0) {
+      audio_now = ((int32_t)audio_now * (16 - alpha) + (int32_t)audio_prev * alpha) >> 4;
+    }
+    audio_prev = audio_now;
   }
 
 #if I2S_AUDIO_ENABLED == 1
@@ -2000,6 +2023,7 @@ int main(void) {
         // Channel mapping (according to target_architecture.md)
         const uint8_t KNOB_I10_VOLUME = 10;
         const uint8_t KNOB_I11_TEMPO = 11;
+        const uint8_t KNOB_I7_STRETCH = 7;
         
         // Read I10 (VOLUME/FOLD)
         knob_mux.Read(KNOB_I10_VOLUME);
@@ -2061,6 +2085,26 @@ int main(void) {
             printf("I11 (TEMPO): %d BPM (knob=%d, sample_bpm=%d)\n", bpm_new, knob_value, BPM_SAMPLED);
 #endif
           }
+        }
+        
+        // Read I7 (STRETCH)
+        knob_mux.Read(KNOB_I7_STRETCH);
+        
+        if (knob_mux.Changed(KNOB_I7_STRETCH)) {
+          // Invert ADC reading (potentiometer wired backwards)
+          uint16_t knob_value = 4095 - knob_mux.Value(KNOB_I7_STRETCH);
+          
+          // Unidirectional mapping for pitch down only
+          // Fully CW right (low values ~0) = normal speed (stretch_change = 0)
+          // Fully CC left (high values ~4095) = maximum pitch down
+          // Pitch up not possible at 48kHz (audio_clk_thresh already = 1)
+          
+          // Simple linear mapping for smooth, constant progression
+          stretch_change_target = (knob_value * 20) / 4095;
+          
+#ifdef DEBUG_KNOB
+          printf("I7 (STRETCH): %d (knob=%d)\n", stretch_change, knob_value);
+#endif
         }
       }
 #endif  // SHIFT_REGISTER_ENABLED == 1
