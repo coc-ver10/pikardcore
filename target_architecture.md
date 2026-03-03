@@ -94,7 +94,10 @@ Each LED corresponds to a button.
 **Additional 8 LEDs:**
 - Likely light up when their corresponding buttons are activated
 - Visual feedback for sequencer and control states
-- **To be confirmed** in final implementation
+- **LED 12 (PLAY/STOP)**: Special behavior implemented
+  - **STOP mode**: LED fixed ON (solid light)
+  - **PLAY mode**: LED blinks at BPM tempo (synchronized with beat_led)
+- Other LEDs (8-11, 13-15): To be confirmed in final implementation
 
 **Implementation:**
 - Controlled by **2× 74HC595 shift registers** (cascaded)
@@ -153,6 +156,27 @@ LEDs use **cascaded 74HC595** shift registers:
 - Only 3 GPIO pins needed (SER, SRCLK, RCLK)
 - Serial data shifts through LEDS_1 → LEDS_2
 - Both registers update simultaneously on RCLK pulse
+
+---
+
+## Player Behavior & Control
+
+### Startup Behavior
+- **Player state on boot**: STOPPED (do_mute = true)
+- Even if the player was running when powered off, it will start in stopped state
+- User must press PLAY button to start playback
+- This prevents unexpected audio output on power-up
+- Flash memory still preserves all other settings (BPM, volume, effects, sequencer patterns)
+
+### PLAY/STOP Control
+**Button I12 (PLAY/STOP)**:
+- Toggle between play and stop states
+- Alternative: Button combination 0+1+6+7 also triggers play/stop
+
+**LED 12 (PLAY/STOP) Visual Feedback**:
+- **STOP mode**: LED is **fixed ON** (solid light indicates ready to play)
+- **PLAY mode**: LED **blinks at BPM tempo** (synchronized with beat detection)
+- Provides immediate visual feedback of player state and tempo
 
 ### GPIO Efficiency
 - **Original Picocore:** 3 + 8 + 8 = 19 GPIO pins minimum
@@ -233,22 +257,22 @@ LEDs use **cascaded 74HC595** shift registers:
   - Point central à 2048 = volume normal (pas de zone morte)
   - Wave-folding distortion avec gain ×7 max pour audio 16-bit
 - **I11 (TEMPO)** ✅ : Mapping asymétrique centré sur le BPM du sample (adaptatif)
-  - Centre du potard = BPM natif du sample (défini par BPM_SAMPLED dans audio2h.h)
-  - Gauche = 50 BPM (min), Droite = 360 BPM (max)
-  - S'adapte automatiquement à chaque sample chargé
-- Tous les autres canaux : en attente d'implémentation progressive
-- Les probabilités utilisent une valeur 0-254 (0 = jamais, 254 = presque toujours)
-- Le filtre utilise 46 positions discrètes (fréquences MIDI notes calculées par biquad.py)
-
-## MULTIPLEXER KEYBOARD
-
-| GPIO | Function | Details |
-| --- | --- | --- |
-| GPIO21 | COM | Common pin |
-| GPIO14 | S0 | Select bit 0 (shared) |
-| GPIO15 | S1 | Select bit 1 (shared) |
-| GPIO16 | S2 | Select bit 2 (shared) |
-| GPIO17 | S3 | Select bit 3 (shared) |
+  - Centre du poBeat selection |
+| I1 | STEP 2 | Beat selection |
+| I2 | STEP 3 | Beat selection |
+| I3 | STEP 4 | Beat selection |
+| I4 | STEP 5 | Beat selection |
+| I5 | STEP 6 | Beat selection |
+| I6 | STEP 7 | Beat selection |
+| I7 | STEP 8 | Beat selection |
+| I8 | Y1 | to define |
+| I9 | Y2 | to define |
+| I10 | Y3 | to define |
+| I11 | Y4 | to define |
+| I12 | PLAY / STOP | Toggle playback (also combo: I0+I1+I6+I7) |
+| I13 | SEQ REC | Sequencer record mode |
+| I14 | SEQ ERASE | Sequencer erase pattern |
+| I15 | SEQ ON / OFF | Sequencer enable/disable bit 3 (shared) |
 
 ### Multiplexer Inputs (Buttons)
 
@@ -305,14 +329,14 @@ LEDs use **cascaded 74HC595** shift registers:
 
 | Output | Function | Notes |
 | --- | --- | --- |
-| QA | LED Y4 | |
-| QB | LED PLAY / STOP | |
-| QC | LED Y1 | |
-| QD | LED SEQ REC | |
-| QE | LED Y2 | |
-| QF | LED SEQ ERASE | |
-| QG | LED Y3 | |
-| QH | LED SEQ ON / OFF | |
+| QA | LED Y4 | to define |
+| QB | LED PLAY / STOP | Fixed ON when stopped, blinks at BPM when playing |
+| QC | LED Y1 | to define |
+| QD | LED SEQ REC | Sequencer recording indicator |
+| QE | LED Y2 | to define |
+| QF | LED SEQ ERASE | Sequencer erase indicator |
+| QG | LED Y3 | to define |
+| QH | LED SEQ ON / OFF | Sequencer on/off state |
 | QH' | (unused) | |
 
 ## DAC AUDIO OUT - I2S PCM5102

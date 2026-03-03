@@ -157,7 +157,7 @@ int16_t audio_now = 0;
 int16_t audio_prev = 0;  // for stretch smoothing filter
 uint8_t audio_clk = 0;
 uint8_t audio_clk_thresh = 48;
-bool do_mute = false;
+bool do_mute = true;  // Start in stopped state - user must press PLAY to start
 uint8_t do_mute_debounce = 0;
 
 // midi out
@@ -1644,6 +1644,9 @@ int main(void) {
         probability_gate = save_data[SAVE_PROB_GATE];
         probability_tunnel = save_data[SAVE_PROB_TUNNEL];
         sequencer.Load(save_data);
+        // Force player to be stopped on startup - user must press PLAY to start
+        sequencer.SetPlaying(false);
+        do_mute = true;
 #ifdef DEBUG_SAVE
         printf("volume_reduce: %d\n", volume_reduce);
         printf("distortion: %d\n", distortion);
@@ -2188,8 +2191,8 @@ int main(void) {
       ledarray.Set(i, 0);
     }
     
-    // LED 12 (PLAY/STOP): ON when playing, OFF when stopped
-    ledarray.Set(12, !do_mute ? 1000 : 0);
+    // LED 12 (PLAY/STOP): Fixed ON when stopped, blinks at BPM when playing
+    ledarray.Set(12, do_mute ? 1000 : (beat_led ? 1000 : 0));
     
     // LEDs 13-15 (SEQ_REC, SEQ_ERASE, SEQ_ON_OFF): Not yet implemented - keep off
     for (uint8_t i = 13; i < 16; i++) {
